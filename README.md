@@ -34,13 +34,6 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 npm install -g @louisraetz/steamidled
 ```
 
-### Homebrew 🍺
-
-```bash
-brew tap louisraetz/steamidled
-brew install steamidled
-```
-
 ## 🎮 Usage
 
 ```bash
