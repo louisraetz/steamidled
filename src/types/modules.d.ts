@@ -11,6 +11,10 @@ declare module 'steam-user' {
   import { EventEmitter } from 'events';
   import SteamID from 'steamid';
 
+  interface SteamUserOptions {
+    enablePicsCache?: boolean;
+  }
+
   interface LogOnDetails {
     accountName?: string;
     password?: string;
@@ -29,6 +33,34 @@ declare module 'steam-user' {
     apps: OwnedApp[];
   }
 
+  interface OwnedAppsOptions {
+    includePlayedFreeGames?: boolean;
+    filterAppids?: number[];
+    includeFreeSub?: boolean;
+    includeAppInfo?: boolean;
+    skipUnvettedApps?: boolean;
+  }
+
+  interface License {
+    package_id: number;
+    owner_id: number;
+    flags: number;
+    access_token?: number;
+  }
+
+  interface PackageInfo {
+    appids?: number[];
+  }
+
+  interface PicsPackageEntry {
+    packageinfo?: PackageInfo | null;
+  }
+
+  interface PicsCache {
+    apps?: Record<number, unknown>;
+    packages?: Record<number, PicsPackageEntry>;
+  }
+
   enum EPersonaState {
     Offline = 0,
     Online = 1,
@@ -42,13 +74,17 @@ declare module 'steam-user' {
 
   class SteamUser extends EventEmitter {
     steamID: SteamID | null;
+    licenses?: License[];
+    picsCache: PicsCache;
 
     static EPersonaState: typeof EPersonaState;
+
+    constructor(options?: SteamUserOptions);
 
     logOn(details: LogOnDetails): void;
     logOff(): void;
     gamesPlayed(apps: number[] | { game_id: number }[]): void;
-    getUserOwnedApps(steamId: SteamID): Promise<OwnedAppsResponse>;
+    getUserOwnedApps(steamId: SteamID, options?: OwnedAppsOptions): Promise<OwnedAppsResponse>;
     setPersona(state: EPersonaState, name?: string): void;
   }
 

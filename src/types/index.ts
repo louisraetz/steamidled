@@ -1,8 +1,11 @@
+export type GameSource = 'owned' | 'free' | 'shared';
+
 export interface SteamGame {
   appid: number;
   name: string;
   playtime_forever: number;
   img_icon_url?: string;
+  source: GameSource;
 }
 
 export interface StoredCredentials {

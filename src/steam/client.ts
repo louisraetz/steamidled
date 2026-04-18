@@ -6,9 +6,15 @@ export class SteamClient {
   private client: SteamUser;
   private _isLoggedIn = false;
   private _accountName: string | null = null;
+  private _ownershipCached = false;
+  private _ownershipCachePromise: Promise<void> | null = null;
 
   constructor() {
-    this.client = new SteamUser();
+    this.client = new SteamUser({ enablePicsCache: true });
+
+    this.client.on('ownershipCached', () => {
+      this._ownershipCached = true;
+    });
   }
 
   get isLoggedIn(): boolean {
@@ -92,19 +98,127 @@ export class SteamClient {
     });
   }
 
-  // Fetches the user's game library from Steam
+  // Fetches the user's library: purchased + played free + family-shared games
   async getOwnedGames(): Promise<SteamGame[]> {
     if (!this._isLoggedIn || !this.client.steamID) {
       throw new Error('Not logged in');
     }
 
-    const response = await this.client.getUserOwnedApps(this.client.steamID);
+    const response = await this.client.getUserOwnedApps(this.client.steamID, {
+      includePlayedFreeGames: true,
+      includeFreeSub: true,
+    });
 
-    return response.apps.map((app) => ({
-      appid: app.appid,
-      name: app.name || `App ${app.appid}`,
-      playtime_forever: app.playtime_forever || 0,
-    }));
+    const ownAccountId = this.client.steamID.accountid;
+    const sharedAppIds = await this.getSharedAppIds(ownAccountId);
+
+    const games: SteamGame[] = response.apps.map((app) => {
+      const source: SteamGame['source'] = sharedAppIds.has(app.appid)
+        ? 'shared'
+        : this.isFreeApp(app.appid, ownAccountId)
+        ? 'free'
+        : 'owned';
+
+      return {
+        appid: app.appid,
+        name: app.name || `App ${app.appid}`,
+        playtime_forever: app.playtime_forever || 0,
+        source,
+      };
+    });
+
+    const seen = new Set(games.map((g) => g.appid));
+    for (const appid of sharedAppIds) {
+      if (seen.has(appid)) continue;
+      games.push({
+        appid,
+        name: this.getAppNameFromCache(appid) || `App ${appid}`,
+        playtime_forever: 0,
+        source: 'shared',
+      });
+    }
+
+    return games;
+  }
+
+  // Resolves once steam-user has populated the PICS ownership cache
+  private waitForOwnershipCache(timeoutMs = 10000): Promise<void> {
+    if (this._ownershipCached) return Promise.resolve();
+    if (this._ownershipCachePromise) return this._ownershipCachePromise;
+
+    this._ownershipCachePromise = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.client.removeListener('ownershipCached', onCached);
+        resolve();
+      }, timeoutMs);
+
+      const onCached = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+
+      this.client.once('ownershipCached', onCached);
+    });
+
+    return this._ownershipCachePromise;
+  }
+
+  // Returns appids belonging to family-shared (non-owned) licenses
+  private async getSharedAppIds(ownAccountId: number): Promise<Set<number>> {
+    await this.waitForOwnershipCache();
+
+    const sharedAppIds = new Set<number>();
+    const licenses = this.client.licenses;
+    const packages = this.client.picsCache?.packages;
+
+    if (!licenses || !packages) return sharedAppIds;
+
+    for (const license of licenses) {
+      if (license.owner_id === ownAccountId) continue;
+      const pkg = packages[license.package_id];
+      const appids = pkg?.packageinfo?.appids;
+      if (!appids) continue;
+      for (const appid of appids) {
+        sharedAppIds.add(appid);
+      }
+    }
+
+    return sharedAppIds;
+  }
+
+  // Returns true if the appid is only available via free-type licenses owned by us
+  private isFreeApp(appid: number, ownAccountId: number): boolean {
+    const licenses = this.client.licenses;
+    const packages = this.client.picsCache?.packages;
+    if (!licenses || !packages) return false;
+
+    let hasOwnLicense = false;
+    let hasPaidLicense = false;
+
+    for (const license of licenses) {
+      if (license.owner_id !== ownAccountId) continue;
+      const pkg = packages[license.package_id];
+      const appids = pkg?.packageinfo?.appids;
+      if (!appids?.includes(appid)) continue;
+
+      hasOwnLicense = true;
+      const billingType = (pkg?.packageinfo as { billingtype?: number } | undefined)?.billingtype;
+      // billingtype values: 0=NoCost, 3=GuestPass, 5=FreeOnDemand, 12=FreeCommercialLicense
+      const freeTypes = new Set([0, 3, 5, 12]);
+      if (billingType !== undefined && !freeTypes.has(billingType)) {
+        hasPaidLicense = true;
+      }
+    }
+
+    return hasOwnLicense && !hasPaidLicense;
+  }
+
+  // Looks up an app name from the PICS cache (used for shared games not in owned-apps response)
+  private getAppNameFromCache(appid: number): string | null {
+    const apps = this.client.picsCache?.apps as
+      | Record<number, { appinfo?: { common?: { name?: string } } }>
+      | undefined;
+    return apps?.[appid]?.appinfo?.common?.name ?? null;
   }
 
   // Sets which games are currently being idled (max 32)

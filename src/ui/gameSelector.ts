@@ -1,6 +1,6 @@
 import * as readline from 'node:readline';
 import chalk from 'chalk';
-import type { SteamGame, GameSelection } from '../types/index.js';
+import type { SteamGame, GameSelection, GameSource } from '../types/index.js';
 import { loadFavorites, saveFavorites } from '../storage/favorites.js';
 
 interface SelectableGame {
@@ -9,7 +9,25 @@ interface SelectableGame {
   playtime: number;
   selected: boolean;
   isFavorite: boolean;
+  source: GameSource;
 }
+
+type SourceFilter = 'all' | 'owned' | 'free' | 'shared';
+
+const FILTER_CYCLE: SourceFilter[] = ['all', 'owned', 'free', 'shared'];
+
+const SOURCE_BADGE: Record<GameSource, string> = {
+  owned: '  ',
+  free: chalk.green('$ '),
+  shared: chalk.magenta('↪ '),
+};
+
+const FILTER_LABEL: Record<SourceFilter, string> = {
+  all: 'all',
+  owned: 'owned',
+  free: 'free-to-play',
+  shared: 'family shared',
+};
 
 interface GameSelectorResult {
   selectedGames: GameSelection[];
@@ -32,6 +50,7 @@ export async function selectGames(
     playtime: game.playtime_forever,
     selected: currentAppIds.has(game.appid) || favorites.includes(game.appid),
     isFavorite: favorites.includes(game.appid),
+    source: game.source,
   }));
 
   // Sort: favorites first (alphabetically), then non-favorites (alphabetically)
@@ -44,38 +63,57 @@ export async function selectGames(
   return new Promise((resolve) => {
     let cursorIndex = 0;
     let scrollOffset = 0;
+    let sourceFilter: SourceFilter = 'all';
     const pageSize = 15;
+
+    const matchesFilter = (g: SelectableGame): boolean =>
+      sourceFilter === 'all' || g.source === sourceFilter;
+
+    const getVisibleGames = (): SelectableGame[] => {
+      const favoriteGames = selectableGames.filter((g) => g.isFavorite && matchesFilter(g));
+      const nonFavoriteGames = selectableGames.filter((g) => !g.isFavorite && matchesFilter(g));
+      return [...favoriteGames, ...nonFavoriteGames];
+    };
+
+    const sourceCounts = (): Record<GameSource, number> => {
+      const counts: Record<GameSource, number> = { owned: 0, free: 0, shared: 0 };
+      for (const g of selectableGames) counts[g.source]++;
+      return counts;
+    };
 
     const render = () => {
       console.clear();
 
-      const favoriteGames = selectableGames.filter((g) => g.isFavorite);
-      const nonFavoriteGames = selectableGames.filter((g) => !g.isFavorite);
+      const filteredGames = getVisibleGames();
+      const favoriteCount = filteredGames.filter((g) => g.isFavorite).length;
 
       console.log(chalk.cyan.bold('\n  Select Games to Idle\n'));
 
-      // Count selections
+      // Count selections + source breakdown
       const selectedCount = selectableGames.filter((g) => g.selected).length;
+      const counts = sourceCounts();
       console.log(
-        chalk.gray(`  Selected: ${selectedCount}/32 | Favorites: ${favoriteGames.length}\n`)
+        chalk.gray(
+          `  Selected: ${selectedCount}/32 | Favorites: ${favoriteCount} | ` +
+            `Owned: ${counts.owned} ${chalk.green('$')} ${counts.free} ${chalk.magenta('↪')} ${counts.shared}`
+        )
       );
+      console.log(chalk.gray(`  Filter: ${chalk.cyan(FILTER_LABEL[sourceFilter])} (T to cycle)\n`));
 
-      // Build visible list
-      const allGames = [...favoriteGames, ...nonFavoriteGames];
       const visibleStart = scrollOffset;
-      const visibleEnd = Math.min(scrollOffset + pageSize, allGames.length);
-      const visibleGames = allGames.slice(visibleStart, visibleEnd);
+      const visibleEnd = Math.min(scrollOffset + pageSize, filteredGames.length);
+      const visibleGames = filteredGames.slice(visibleStart, visibleEnd);
 
-      const favoritesEndIndex = favoriteGames.length;
+      const favoritesEndIndex = favoriteCount;
 
       // Render favorites header if there are favorites and we're showing some
-      if (favoriteGames.length > 0 && scrollOffset < favoritesEndIndex) {
+      if (favoriteCount > 0 && scrollOffset < favoritesEndIndex) {
         console.log(chalk.yellow.bold('  ★ FAVORITES\n'));
       }
 
       let displayIndex = visibleStart;
       for (const game of visibleGames) {
-        if (displayIndex === favoritesEndIndex && favoriteGames.length > 0) {
+        if (displayIndex === favoritesEndIndex && favoriteCount > 0) {
           console.log('');
           console.log(chalk.gray.bold('  ALL GAMES\n'));
         }
@@ -83,11 +121,12 @@ export async function selectGames(
         const isCurrent = displayIndex === cursorIndex;
         const checkbox = game.selected ? chalk.green('[✓]') : chalk.gray('[ ]');
         const star = game.isFavorite ? chalk.yellow('★ ') : '  ';
+        const badge = SOURCE_BADGE[game.source];
         const playtime = formatPlaytime(game.playtime);
         const name =
           game.name.length > 40 ? game.name.substring(0, 37) + '...' : game.name;
 
-        const line = `  ${checkbox} ${star}${name} ${chalk.gray(`(${playtime})`)}`;
+        const line = `  ${checkbox} ${star}${badge}${name} ${chalk.gray(`(${playtime})`)}`;
 
         if (isCurrent) {
           console.log(chalk.bgGray.white(line));
@@ -98,24 +137,25 @@ export async function selectGames(
         displayIndex++;
       }
 
+      if (filteredGames.length === 0) {
+        console.log(chalk.gray('  No games match the current filter.'));
+      }
+
       // Scroll indicator
-      if (allGames.length > pageSize) {
-        const scrollInfo = `  ${visibleStart + 1}-${visibleEnd} of ${allGames.length}`;
+      if (filteredGames.length > pageSize) {
+        const scrollInfo = `  ${visibleStart + 1}-${visibleEnd} of ${filteredGames.length}`;
         console.log(chalk.gray(`\n${scrollInfo}`));
       }
 
       // Instructions
       console.log('');
-      console.log(chalk.gray('  ↑/↓: Navigate | Space: Toggle | F: Favorite'));
+      console.log(chalk.gray('  ↑/↓: Navigate | Space: Toggle | F: Favorite | T: Filter'));
       console.log(chalk.gray('  Enter: Start | S: Start all favorites'));
       console.log('');
     };
 
     const handleKey = (str: string | undefined, key: readline.Key) => {
-      const allGames = [
-        ...selectableGames.filter((g) => g.isFavorite),
-        ...selectableGames.filter((g) => !g.isFavorite),
-      ];
+      const allGames = getVisibleGames();
 
       if (key.ctrl && key.name === 'c') {
         cleanup();
@@ -174,7 +214,8 @@ export async function selectGames(
             return a.name.localeCompare(b.name);
           });
 
-          const newIndex = selectableGames.findIndex((g) => g.appid === game.appid);
+          const visible = getVisibleGames();
+          const newIndex = visible.findIndex((g) => g.appid === game.appid);
           cursorIndex = newIndex >= 0 ? newIndex : 0;
 
           if (cursorIndex < scrollOffset) {
@@ -182,6 +223,25 @@ export async function selectGames(
           } else if (cursorIndex >= scrollOffset + pageSize) {
             scrollOffset = cursorIndex - pageSize + 1;
           }
+        }
+        render();
+        return;
+      }
+
+      if (str === 't' || str === 'T') {
+        const focusedAppId = allGames[cursorIndex]?.appid;
+        const idx = FILTER_CYCLE.indexOf(sourceFilter);
+        sourceFilter = FILTER_CYCLE[(idx + 1) % FILTER_CYCLE.length];
+
+        const visible = getVisibleGames();
+        const refoundIndex =
+          focusedAppId !== undefined ? visible.findIndex((g) => g.appid === focusedAppId) : -1;
+        cursorIndex = refoundIndex >= 0 ? refoundIndex : 0;
+        scrollOffset = Math.max(0, Math.min(scrollOffset, Math.max(0, visible.length - pageSize)));
+        if (cursorIndex < scrollOffset) {
+          scrollOffset = cursorIndex;
+        } else if (cursorIndex >= scrollOffset + pageSize) {
+          scrollOffset = cursorIndex - pageSize + 1;
         }
         render();
         return;
