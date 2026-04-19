@@ -64,10 +64,16 @@ export async function selectGames(
     let cursorIndex = 0;
     let scrollOffset = 0;
     let sourceFilter: SourceFilter = 'all';
+    let searchQuery = '';
+    let isSearchMode = false;
     const pageSize = 15;
 
+    const matchesQuery = (g: SelectableGame): boolean =>
+      searchQuery.length === 0 ||
+      g.name.toLowerCase().includes(searchQuery.toLowerCase());
+
     const matchesFilter = (g: SelectableGame): boolean =>
-      sourceFilter === 'all' || g.source === sourceFilter;
+      (sourceFilter === 'all' || g.source === sourceFilter) && matchesQuery(g);
 
     const getVisibleGames = (): SelectableGame[] => {
       const favoriteGames = selectableGames.filter((g) => g.isFavorite && matchesFilter(g));
@@ -98,7 +104,13 @@ export async function selectGames(
             `Owned: ${counts.owned} ${chalk.green('$')} ${counts.free} ${chalk.magenta('↪')} ${counts.shared}`
         )
       );
-      console.log(chalk.gray(`  Filter: ${chalk.cyan(FILTER_LABEL[sourceFilter])} (T to cycle)\n`));
+      console.log(chalk.gray(`  Filter: ${chalk.cyan(FILTER_LABEL[sourceFilter])} (T to cycle)`));
+      if (isSearchMode) {
+        console.log(chalk.cyan(`  Search: ${searchQuery}_`));
+      } else if (searchQuery.length > 0) {
+        console.log(chalk.gray(`  Search: ${chalk.cyan(searchQuery)} (/ to edit, Esc to clear)`));
+      }
+      console.log('');
 
       const visibleStart = scrollOffset;
       const visibleEnd = Math.min(scrollOffset + pageSize, filteredGames.length);
@@ -149,8 +161,12 @@ export async function selectGames(
 
       // Instructions
       console.log('');
-      console.log(chalk.gray('  ↑/↓: Navigate | Space: Toggle | F: Favorite | T: Filter'));
-      console.log(chalk.gray('  Enter: Start | S: Start all favorites'));
+      if (isSearchMode) {
+        console.log(chalk.gray('  Type to filter | Backspace: delete | Esc: cancel | Enter: confirm'));
+      } else {
+        console.log(chalk.gray('  ↑/↓: Navigate | Space: Toggle | F: Favorite | T: Filter | /: Search'));
+        console.log(chalk.gray('  Enter: Start | S: Start all favorites'));
+      }
       console.log('');
     };
 
@@ -181,6 +197,55 @@ export async function selectGames(
           }
         }
         render();
+        return;
+      }
+
+      if (isSearchMode) {
+        if (key.name === 'return') {
+          isSearchMode = false;
+          render();
+          return;
+        }
+        if (key.name === 'escape') {
+          isSearchMode = false;
+          searchQuery = '';
+          cursorIndex = 0;
+          scrollOffset = 0;
+          render();
+          return;
+        }
+        if (key.name === 'backspace') {
+          if (searchQuery.length > 0) {
+            searchQuery = searchQuery.slice(0, -1);
+            cursorIndex = 0;
+            scrollOffset = 0;
+          }
+          render();
+          return;
+        }
+        if (str && str.length === 1 && !key.ctrl && !key.meta && str.charCodeAt(0) >= 32) {
+          searchQuery += str;
+          cursorIndex = 0;
+          scrollOffset = 0;
+          render();
+          return;
+        }
+        return;
+      }
+
+      if (str === '/') {
+        isSearchMode = true;
+        render();
+        return;
+      }
+
+      if (key.name === 'escape') {
+        if (searchQuery.length > 0) {
+          searchQuery = '';
+          cursorIndex = 0;
+          scrollOffset = 0;
+          render();
+        }
         return;
       }
 
