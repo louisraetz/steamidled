@@ -1,7 +1,7 @@
 import * as readline from 'node:readline';
 import chalk from 'chalk';
-import type { SteamGame, GameSelection, GameSource } from '../types/index.js';
-import { loadFavorites, saveFavorites } from '../storage/favorites.js';
+import type { SteamGame, GameSelection, GameSource, GameSelectorResult } from '../types/index.js';
+import { loadFavorites, saveFavorites, loadExempt, saveExempt } from '../storage/favorites.js';
 
 interface SelectableGame {
   appid: number;
@@ -9,6 +9,7 @@ interface SelectableGame {
   playtime: number;
   selected: boolean;
   isFavorite: boolean;
+  isExempt: boolean;
   source: GameSource;
 }
 
@@ -29,11 +30,6 @@ const FILTER_LABEL: Record<SourceFilter, string> = {
   shared: 'family shared',
 };
 
-interface GameSelectorResult {
-  selectedGames: GameSelection[];
-  quickStart: boolean; // true if user pressed Shift+Enter
-}
-
 // Interactive game selection with keyboard navigation and favorites support
 export async function selectGames(
   games: SteamGame[],
@@ -41,6 +37,7 @@ export async function selectGames(
   currentSelection: GameSelection[] = []
 ): Promise<GameSelectorResult> {
   const favorites = loadFavorites(accountName);
+  const initialExempt = loadExempt(accountName);
   const currentAppIds = new Set(currentSelection.map((g) => g.appid));
 
   // Create selectable games list
@@ -50,6 +47,7 @@ export async function selectGames(
     playtime: game.playtime_forever,
     selected: currentAppIds.has(game.appid) || favorites.includes(game.appid),
     isFavorite: favorites.includes(game.appid),
+    isExempt: initialExempt === game.appid,
     source: game.source,
   }));
 
@@ -66,6 +64,7 @@ export async function selectGames(
     let sourceFilter: SourceFilter = 'all';
     let searchQuery = '';
     let isSearchMode = false;
+    let currentExempt: number | null = initialExempt;
     const pageSize = 15;
 
     const matchesQuery = (g: SelectableGame): boolean =>
@@ -98,12 +97,19 @@ export async function selectGames(
       // Count selections + source breakdown
       const selectedCount = selectableGames.filter((g) => g.selected).length;
       const counts = sourceCounts();
+      const exemptGame = selectableGames.find((g) => g.isExempt);
+      const exemptLabel = exemptGame
+        ? exemptGame.name.length > 30
+          ? exemptGame.name.substring(0, 27) + '...'
+          : exemptGame.name
+        : 'none';
       console.log(
         chalk.gray(
           `  Selected: ${selectedCount}/32 | Favorites: ${favoriteCount} | ` +
             `Owned: ${counts.owned} ${chalk.green('$')} ${counts.free} ${chalk.magenta('↪')} ${counts.shared}`
         )
       );
+      console.log(chalk.gray(`  Exempt: ${chalk.cyan(exemptLabel)} (X to toggle)`));
       console.log(chalk.gray(`  Filter: ${chalk.cyan(FILTER_LABEL[sourceFilter])} (T to cycle)`));
       if (isSearchMode) {
         console.log(chalk.cyan(`  Search: ${searchQuery}_`));
@@ -133,12 +139,13 @@ export async function selectGames(
         const isCurrent = displayIndex === cursorIndex;
         const checkbox = game.selected ? chalk.green('[✓]') : chalk.gray('[ ]');
         const star = game.isFavorite ? chalk.yellow('★ ') : '  ';
+        const exemptMark = game.isExempt ? chalk.cyan('∞ ') : '  ';
         const badge = SOURCE_BADGE[game.source];
         const playtime = formatPlaytime(game.playtime);
         const name =
           game.name.length > 40 ? game.name.substring(0, 37) + '...' : game.name;
 
-        const line = `  ${checkbox} ${star}${badge}${name} ${chalk.gray(`(${playtime})`)}`;
+        const line = `  ${checkbox} ${star}${exemptMark}${badge}${name} ${chalk.gray(`(${playtime})`)}`;
 
         if (isCurrent) {
           console.log(chalk.bgGray.white(line));
@@ -164,7 +171,7 @@ export async function selectGames(
       if (isSearchMode) {
         console.log(chalk.gray('  Type to filter | Backspace: delete | Esc: cancel | Enter: confirm'));
       } else {
-        console.log(chalk.gray('  ↑/↓: Navigate | Space: Toggle | F: Favorite | T: Filter | /: Search'));
+        console.log(chalk.gray('  ↑/↓: Navigate | Space: Toggle | F: Favorite | X: Exempt | T: Filter | /: Search'));
         console.log(chalk.gray('  Enter: Start | S: Start all favorites'));
       }
       console.log('');
@@ -312,12 +319,29 @@ export async function selectGames(
         return;
       }
 
+      if (str === 'x' || str === 'X') {
+        const game = allGames[cursorIndex];
+        if (game) {
+          if (game.isExempt) {
+            game.isExempt = false;
+            currentExempt = null;
+          } else {
+            for (const g of selectableGames) g.isExempt = false;
+            game.isExempt = true;
+            currentExempt = game.appid;
+          }
+          saveExempt(accountName, currentExempt);
+        }
+        render();
+        return;
+      }
+
       if (str === 's' || str === 'S') {
         cleanup();
         const selectedGames = selectableGames
           .filter((g) => g.isFavorite)
           .map((g) => ({ appid: g.appid, name: g.name }));
-        resolve({ selectedGames, quickStart: true });
+        resolve({ selectedGames, quickStart: true, exemptAppId: currentExempt });
         return;
       }
 
@@ -326,7 +350,7 @@ export async function selectGames(
         const selectedGames = selectableGames
           .filter((g) => g.selected)
           .map((g) => ({ appid: g.appid, name: g.name }));
-        resolve({ selectedGames, quickStart: false });
+        resolve({ selectedGames, quickStart: false, exemptAppId: currentExempt });
         return;
       }
     };

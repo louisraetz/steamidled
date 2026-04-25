@@ -38,4 +38,12 @@ export interface IdlingGame {
   initialPlaytime: number;  // playtime_forever from Steam (in minutes)
   startTime: Date;          // when this game started idling
   accumulatedMs: number;    // accumulated idle time (for pause/resume)
+  nextPauseAtMs: number | null;  // accumulatedMs threshold to enter cooldown; null = exempt
+  pauseUntil: Date | null;       // when set, game is in randomizer cooldown
+}
+
+export interface GameSelectorResult {
+  selectedGames: GameSelection[];
+  quickStart: boolean;
+  exemptAppId: number | null;
 }

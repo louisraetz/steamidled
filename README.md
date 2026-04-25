@@ -21,6 +21,10 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 - **📱 QR Code Login** — Scan with Steam mobile app
 - **🔐 Traditional Login** — Username/password with Steam Guard (for the old school folks)
 - **🎯 Idle up to 32 games** — Because Steam said that's the limit and who are we to argue
+- **🎲 Smart cooldowns** — Games cycle between random idle and cooldown phases so playtime totals naturally diverge instead of looking suspiciously identical
+- **♾️ Exempt one game** — Pick a favorite that ignores cooldowns and idles forever
+- **🔍 Search & filter** — Type `/` to search by name, `T` to cycle owned / free / family-shared
+- **👨‍👧 Family-shared library** — Idle games shared with you, tagged with a `↪` badge
 - **📊 Real-time tracking** — Watch numbers go up. Dopamine achieved.
 - **⭐ Favorites system** — Star your favorites so you can pretend you're organized
 - **⏸️ Auto-pause** — Automatically pauses when you actually play a game (rare occurrence)
@@ -60,6 +64,9 @@ Automatically logs in and starts idling your favorited games. Perfect for runnin
 | `↑` `↓` | Navigate (you got this) |
 | `Space` | Toggle game on/off |
 | `F` | Favorite a game ⭐ |
+| `X` | Mark as exempt from the randomizer ♾️ |
+| `T` | Cycle source filter (all / owned / free / family-shared) |
+| `/` | Search by name (case-insensitive, Esc to clear) |
 | `S` | Start all favorites |
 | `Enter` | Let's gooo 🚀 |
 
@@ -70,6 +77,18 @@ Automatically logs in and starts idling your favorited games. Perfect for runnin
 | `E` | Edit your selection (changed your mind?) |
 | `Q` | Quit gracefully (like a gentleman) |
 | `Ctrl+C` | Rage quit |
+
+## 🎲 How the randomizer works
+
+Idling all your games full-throttle for a month gives them suspiciously identical hour counts. To avoid that, every game runs on its own private schedule:
+
+- **Idle phase** — random 7–30 days of active idling
+- **Cooldown phase** — random 100–200 hours where the game drops out of the rotation
+- After cooldown, the game rejoins the idle pool with a fresh idle-phase target and the cycle repeats
+
+Run for a month and your library ends up with naturally varied playtime instead of one tell-tale plateau.
+
+Want one game that just idles forever? Hit `X` on it in the selector — it gets marked with `∞`, skips cooldowns entirely, and idles for as long as the process is running. Only one game can be exempt at a time.
 
 ## 🐧 Running 24/7 on Linux
 
@@ -129,7 +148,7 @@ Everything lives in `~/.steam-idler/`:
 ```
 ~/.steam-idler/
 ├── credentials.json          # Your login token (keep it secret 🤫)
-└── favorites-{username}.json # Your favorite games
+└── favorites-{username}.json # Your favorites + exempt game pick
 ```
 
 ## 📋 Requirements

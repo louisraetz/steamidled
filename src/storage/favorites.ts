@@ -6,6 +6,7 @@ const CONFIG_DIR = join(homedir(), '.steam-idler');
 
 interface FavoritesData {
   favorites: number[];
+  exemptAppId?: number | null;
 }
 
 // Constructs the path to an account-specific favorites JSON file
@@ -20,28 +21,50 @@ function ensureConfigDir(): void {
   }
 }
 
+// Reads the favorites file with defaults so writes can preserve sibling fields
+function readData(accountName: string): FavoritesData {
+  const filePath = getFavoritesPath(accountName);
+  if (!existsSync(filePath)) {
+    return { favorites: [], exemptAppId: null };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as FavoritesData;
+    return {
+      favorites: parsed.favorites || [],
+      exemptAppId: parsed.exemptAppId ?? null,
+    };
+  } catch {
+    return { favorites: [], exemptAppId: null };
+  }
+}
+
+function writeData(accountName: string, data: FavoritesData): void {
+  ensureConfigDir();
+  writeFileSync(getFavoritesPath(accountName), JSON.stringify(data, null, 2), 'utf-8');
+}
+
 // Saves the list of favorite game IDs to a JSON file
 export function saveFavorites(accountName: string, favorites: number[]): void {
-  ensureConfigDir();
-  const data: FavoritesData = { favorites };
-  writeFileSync(getFavoritesPath(accountName), JSON.stringify(data, null, 2), 'utf-8');
+  const data = readData(accountName);
+  data.favorites = favorites;
+  writeData(accountName, data);
 }
 
 // Loads favorite game IDs from the JSON file, returning empty array if not found
 export function loadFavorites(accountName: string): number[] {
-  const filePath = getFavoritesPath(accountName);
+  return readData(accountName).favorites;
+}
 
-  if (!existsSync(filePath)) {
-    return [];
-  }
+// Loads the exempt appid (game excluded from the randomizer), or null if none
+export function loadExempt(accountName: string): number | null {
+  return readData(accountName).exemptAppId ?? null;
+}
 
-  try {
-    const data = readFileSync(filePath, 'utf-8');
-    const parsed = JSON.parse(data) as FavoritesData;
-    return parsed.favorites || [];
-  } catch {
-    return [];
-  }
+// Saves the exempt appid (or null to clear)
+export function saveExempt(accountName: string, exemptAppId: number | null): void {
+  const data = readData(accountName);
+  data.exemptAppId = exemptAppId;
+  writeData(accountName, data);
 }
 
 // Adds a game to the favorites list if not already present

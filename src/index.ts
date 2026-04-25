@@ -18,22 +18,76 @@ import {
   showGoodbye,
   showError,
 } from './ui/display.js';
-import { loadFavorites } from './storage/favorites.js';
+import { loadFavorites, loadExempt } from './storage/favorites.js';
 import ora from 'ora';
 import type { SteamGame, GameSelection, IdlingGame, LoginResult } from './types/index.js';
 
 const args = process.argv.slice(2);
 const isHeadless = args.includes('--headless');
 
+const HOURS_MS = 60 * 60 * 1000;
 const client = new SteamClient();
 let isIdling = false;
 let idlingGames: IdlingGame[] = [];
 let pausedGames: IdlingGame[] = [];
+let pausingGames: IdlingGame[] = [];
 let allGames: SteamGame[] = [];
 let startTime: Date | null = null;
 let updateInterval: NodeJS.Timeout | null = null;
 let isInEditMode = false;
 let accountName: string = '';
+let exemptAppId: number | null = null;
+
+// 7-30 days, the active idle phase length before a game enters cooldown
+function randomIdlePhaseMs(): number {
+  return Math.floor((168 + Math.random() * 552) * HOURS_MS);
+}
+
+// 100-200 hours, the cooldown length before a game rejoins the idle pool
+function randomCooldownMs(): number {
+  return Math.floor((100 + Math.random() * 100) * HOURS_MS);
+}
+
+// Moves games between idling/pausing arrays based on per-game random schedules
+function tickRandomizer(): void {
+  const now = new Date();
+  let mutated = false;
+
+  const stillIdling: IdlingGame[] = [];
+  for (const game of idlingGames) {
+    if (game.nextPauseAtMs === null) {
+      stillIdling.push(game);
+      continue;
+    }
+    const elapsedMs = game.accumulatedMs + (now.getTime() - game.startTime.getTime());
+    if (elapsedMs >= game.nextPauseAtMs) {
+      game.accumulatedMs = elapsedMs;
+      game.pauseUntil = new Date(now.getTime() + randomCooldownMs());
+      pausingGames.push(game);
+      mutated = true;
+    } else {
+      stillIdling.push(game);
+    }
+  }
+  if (mutated) idlingGames = stillIdling;
+
+  const stillCooling: IdlingGame[] = [];
+  for (const game of pausingGames) {
+    if (game.pauseUntil && now >= game.pauseUntil) {
+      game.pauseUntil = null;
+      game.startTime = now;
+      game.nextPauseAtMs = game.accumulatedMs + randomIdlePhaseMs();
+      idlingGames.push(game);
+      mutated = true;
+    } else {
+      stillCooling.push(game);
+    }
+  }
+  if (mutated) {
+    pausingGames = stillCooling;
+    client.setGamesPlaying(idlingGames.map((g) => g.appid));
+  }
+}
 
 // Main entry point that orchestrates the application flow
 async function main(): Promise<void> {
@@ -82,6 +136,8 @@ async function runHeadless(): Promise<void> {
     process.exit(1);
   }
 
+  exemptAppId = loadExempt(accountName);
+
   const selectedGames: GameSelection[] = allGames
     .filter((g) => favoriteIds.includes(g.appid))
     .map((g) => ({ appid: g.appid, name: g.name }));
@@ -91,7 +147,11 @@ async function runHeadless(): Promise<void> {
     process.exit(1);
   }
 
+  const exemptName = exemptAppId
+    ? allGames.find((g) => g.appid === exemptAppId)?.name ?? null
+    : null;
   console.log(`Starting ${selectedGames.length} favorite game(s)...`);
+  if (exemptName) console.log(`Exempt from randomizer: ${exemptName}`);
   startIdling(selectedGames);
 }
 
@@ -123,13 +183,14 @@ async function runInteractive(): Promise<void> {
     process.exit(1);
   }
 
-  const { selectedGames } = await selectGames(allGames, accountName);
+  const { selectedGames, exemptAppId: selectedExempt } = await selectGames(allGames, accountName);
 
   if (selectedGames.length === 0) {
     showError('No games selected');
     process.exit(1);
   }
 
+  exemptAppId = selectedExempt;
   startIdling(selectedGames);
 }
 
@@ -181,7 +242,11 @@ function setupKeyboardInput(): void {
 }
 
 // Creates an IdlingGame object from a GameSelection
-function createIdlingGame(game: GameSelection, steamGame?: SteamGame): IdlingGame {
+function createIdlingGame(
+  game: GameSelection,
+  steamGame?: SteamGame,
+  isExempt = false
+): IdlingGame {
   const initialPlaytime = steamGame?.playtime_forever ?? 0;
   return {
     appid: game.appid,
@@ -189,12 +254,14 @@ function createIdlingGame(game: GameSelection, steamGame?: SteamGame): IdlingGam
     initialPlaytime,
     startTime: new Date(),
     accumulatedMs: 0,
+    nextPauseAtMs: isExempt ? null : randomIdlePhaseMs(),
+    pauseUntil: null,
   };
 }
 
 // Converts IdlingGame array back to GameSelection array for the selector
 function getGameCurrentSelection(): GameSelection[] {
-  return [...idlingGames, ...pausedGames].map((g) => ({
+  return [...idlingGames, ...pausedGames, ...pausingGames].map((g) => ({
     appid: g.appid,
     name: g.name,
   }));
@@ -217,7 +284,11 @@ async function enterEditMode(): Promise<void> {
   console.clear();
 
   const currentSelection = getGameCurrentSelection();
-  const { selectedGames: newSelection } = await selectGames(allGames, accountName, currentSelection);
+  const { selectedGames: newSelection, exemptAppId: newExemptAppId } = await selectGames(
+    allGames,
+    accountName,
+    currentSelection
+  );
 
   if (newSelection.length === 0) {
     showError('No games selected - keeping current selection');
@@ -225,14 +296,29 @@ async function enterEditMode(): Promise<void> {
       game.startTime = new Date();
     }
   } else {
-    const oldAppIds = new Set([...idlingGames, ...pausedGames].map((g) => g.appid));
+    const oldAppIds = new Set(
+      [...idlingGames, ...pausedGames, ...pausingGames].map((g) => g.appid)
+    );
     const newAppIds = new Set(newSelection.map((g) => g.appid));
+
+    const applyExemptChange = (game: IdlingGame): void => {
+      const shouldBeExempt = game.appid === newExemptAppId;
+      const wasExempt = game.nextPauseAtMs === null;
+      if (shouldBeExempt && !wasExempt) {
+        game.nextPauseAtMs = null;
+        game.pauseUntil = null;
+      } else if (!shouldBeExempt && wasExempt) {
+        game.nextPauseAtMs = game.accumulatedMs + randomIdlePhaseMs();
+      }
+    };
 
     const keptIdlingGames: IdlingGame[] = [];
     const keptPausedGames: IdlingGame[] = [];
+    const keptPausingGames: IdlingGame[] = [];
 
     for (const game of idlingGames) {
       if (newAppIds.has(game.appid)) {
+        applyExemptChange(game);
         game.startTime = new Date();
         keptIdlingGames.push(game);
       }
@@ -240,22 +326,38 @@ async function enterEditMode(): Promise<void> {
 
     for (const game of pausedGames) {
       if (newAppIds.has(game.appid)) {
+        applyExemptChange(game);
         keptPausedGames.push(game);
+      }
+    }
+
+    for (const game of pausingGames) {
+      if (newAppIds.has(game.appid)) {
+        applyExemptChange(game);
+        // Becoming exempt clears pauseUntil — game rejoins idling immediately
+        if (game.nextPauseAtMs === null) {
+          game.startTime = new Date();
+          keptIdlingGames.push(game);
+        } else {
+          keptPausingGames.push(game);
+        }
       }
     }
 
     for (const selection of newSelection) {
       if (!oldAppIds.has(selection.appid)) {
         const steamGame = allGames.find((g) => g.appid === selection.appid);
-        keptIdlingGames.push(createIdlingGame(selection, steamGame));
+        const isExempt = selection.appid === newExemptAppId;
+        keptIdlingGames.push(createIdlingGame(selection, steamGame, isExempt));
       }
     }
 
     idlingGames = keptIdlingGames;
     pausedGames = keptPausedGames;
+    pausingGames = keptPausingGames;
+    exemptAppId = newExemptAppId;
 
-    const appIds = idlingGames.map((g) => g.appid);
-    client.setGamesPlaying(appIds);
+    client.setGamesPlaying(idlingGames.map((g) => g.appid));
   }
 
   if (process.stdin.isTTY) {
@@ -267,10 +369,11 @@ async function enterEditMode(): Promise<void> {
   isInEditMode = false;
 
   if (startTime) {
-    showIdlingStatus(idlingGames, pausedGames);
+    showIdlingStatus(idlingGames, pausedGames, pausingGames);
     updateInterval = setInterval(() => {
       if (startTime && !isInEditMode) {
-        showIdlingStatus(idlingGames, pausedGames);
+        tickRandomizer();
+        showIdlingStatus(idlingGames, pausedGames, pausingGames);
       }
     }, 60000);
   }
@@ -281,34 +384,51 @@ function handlePlayingState(blocked: boolean, playingApp: number): void {
   if (isInEditMode) return;
 
   if (blocked) {
-    const gameIndex = idlingGames.findIndex((g) => g.appid === playingApp);
-    if (gameIndex !== -1) {
-      const game = idlingGames[gameIndex];
+    const idleIndex = idlingGames.findIndex((g) => g.appid === playingApp);
+    if (idleIndex !== -1) {
+      const game = idlingGames[idleIndex];
       const now = new Date();
       game.accumulatedMs += now.getTime() - game.startTime.getTime();
 
-      const [pausedGame] = idlingGames.splice(gameIndex, 1);
+      const [pausedGame] = idlingGames.splice(idleIndex, 1);
       pausedGames.push(pausedGame);
 
-      const appIds = idlingGames.map((g) => g.appid);
-      client.setGamesPlaying(appIds);
+      client.setGamesPlaying(idlingGames.map((g) => g.appid));
+      showIdlingStatus(idlingGames, pausedGames, pausingGames);
+      return;
+    }
 
-      showIdlingStatus(idlingGames, pausedGames);
+    const coolingIndex = pausingGames.findIndex((g) => g.appid === playingApp);
+    if (coolingIndex !== -1) {
+      const [pausedGame] = pausingGames.splice(coolingIndex, 1);
+      pausedGames.push(pausedGame);
+      showIdlingStatus(idlingGames, pausedGames, pausingGames);
     }
   } else {
     if (pausedGames.length > 0) {
       const now = new Date();
+      const restoredIdling: IdlingGame[] = [];
+      const restoredCooling: IdlingGame[] = [];
+
       for (const game of pausedGames) {
-        game.startTime = now;
+        if (game.pauseUntil && now < game.pauseUntil) {
+          restoredCooling.push(game);
+        } else {
+          game.pauseUntil = null;
+          game.startTime = now;
+          if (game.nextPauseAtMs !== null) {
+            game.nextPauseAtMs = game.accumulatedMs + randomIdlePhaseMs();
+          }
+          restoredIdling.push(game);
+        }
       }
 
-      idlingGames.push(...pausedGames);
+      idlingGames.push(...restoredIdling);
+      pausingGames.push(...restoredCooling);
       pausedGames = [];
 
-      const appIds = idlingGames.map((g) => g.appid);
-      client.setGamesPlaying(appIds);
-
-      showIdlingStatus(idlingGames, pausedGames);
+      client.setGamesPlaying(idlingGames.map((g) => g.appid));
+      showIdlingStatus(idlingGames, pausedGames, pausingGames);
     }
   }
 }
@@ -320,20 +440,22 @@ function startIdling(games: GameSelection[]): void {
 
   idlingGames = games.map((game) => {
     const steamGame = allGames.find((g) => g.appid === game.appid);
-    return createIdlingGame(game, steamGame);
+    return createIdlingGame(game, steamGame, game.appid === exemptAppId);
   });
   pausedGames = [];
+  pausingGames = [];
 
   const appIds = games.map((g) => g.appid);
   client.setGamesPlaying(appIds);
 
   setupKeyboardInput();
 
-  showIdlingStatus(idlingGames, pausedGames);
+  showIdlingStatus(idlingGames, pausedGames, pausingGames);
 
   updateInterval = setInterval(() => {
     if (startTime && !isInEditMode) {
-      showIdlingStatus(idlingGames, pausedGames);
+      tickRandomizer();
+      showIdlingStatus(idlingGames, pausedGames, pausingGames);
     }
   }, 60000);
 

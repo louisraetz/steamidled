@@ -48,10 +48,33 @@ function getTotalPlaytime(game: IdlingGame, isPaused: boolean): string {
   return formatPlaytimeHours(totalMinutes);
 }
 
+// Renders the Game cell: truncated name plus an ∞ marker if exempt
+function nameCell(game: IdlingGame, dim = false): string {
+  const truncated = game.name.length > 35 ? game.name.substring(0, 32) + '...' : game.name;
+  const base = dim ? chalk.gray(truncated) : truncated;
+  return game.nextPauseAtMs === null ? `${base} ${chalk.cyan('∞')}` : base;
+}
+
+// Renders the Status cell for cooldown games, with a coarse remaining-time hint
+function formatCooldownLabel(pauseUntil: Date | null): string {
+  if (!pauseUntil) return 'Cooldown';
+  const ms = pauseUntil.getTime() - Date.now();
+  if (ms <= 0) return 'Cooldown';
+  const totalMinutes = ms / 60000;
+  if (totalMinutes >= 24 * 60) {
+    return `Cooldown ${Math.floor(totalMinutes / (24 * 60))}d`;
+  }
+  if (totalMinutes >= 60) {
+    return `Cooldown ${Math.floor(totalMinutes / 60)}h`;
+  }
+  return `Cooldown ${Math.floor(totalMinutes)}m`;
+}
+
 // Displays a formatted table showing the status of all idling games
 export function showIdlingStatus(
   idlingGames: IdlingGame[],
-  pausedGames: IdlingGame[] = []
+  pausedGames: IdlingGame[] = [],
+  pausingGames: IdlingGame[] = []
 ): void {
   console.clear();
 
@@ -64,7 +87,7 @@ export function showIdlingStatus(
       chalk.cyan('Gained'),
       chalk.cyan('Status'),
     ],
-    colWidths: [38, 10, 12, 10],
+    colWidths: [38, 10, 12, 14],
     style: {
       head: [],
       border: ['gray'],
@@ -73,7 +96,7 @@ export function showIdlingStatus(
 
   for (const game of idlingGames) {
     table.push([
-      game.name.length > 35 ? game.name.substring(0, 32) + '...' : game.name,
+      nameCell(game),
       getTotalPlaytime(game, false),
       chalk.green(formatGainedTime(game, false)),
       chalk.green('Idling'),
@@ -82,20 +105,32 @@ export function showIdlingStatus(
 
   for (const game of pausedGames) {
     table.push([
-      chalk.gray(game.name.length > 35 ? game.name.substring(0, 32) + '...' : game.name),
+      nameCell(game, true),
       chalk.gray(getTotalPlaytime(game, true)),
       chalk.gray(formatGainedTime(game, true)),
       chalk.yellow('Paused'),
     ]);
   }
 
+  for (const game of pausingGames) {
+    table.push([
+      nameCell(game, true),
+      chalk.gray(getTotalPlaytime(game, true)),
+      chalk.gray(formatGainedTime(game, true)),
+      chalk.cyan(formatCooldownLabel(game.pauseUntil)),
+    ]);
+  }
+
   console.log(table.toString());
+
+  const parts: string[] = [];
+  if (pausedGames.length > 0) parts.push(chalk.yellow(`${pausedGames.length} paused`));
+  if (pausingGames.length > 0) parts.push(chalk.cyan(`${pausingGames.length} cooling down`));
+  const suffix = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 
   console.log(
     chalk.green(`\n  Idling ${chalk.bold(idlingGames.length)} game${idlingGames.length !== 1 ? 's' : ''}`) +
-      (pausedGames.length > 0
-        ? chalk.yellow(` (${pausedGames.length} paused - playing on Steam)`)
-        : '') +
+      suffix +
       '\n'
   );
   console.log(chalk.gray("  Press 'E' to edit games | 'Q' to quit\n"));
