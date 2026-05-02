@@ -23,6 +23,7 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 - **🎯 Idle up to 32 games** — Because Steam said that's the limit and who are we to argue
 - **🎲 Smart cooldowns** — Games cycle between random idle and cooldown phases so playtime totals naturally diverge instead of looking suspiciously identical
 - **♾️ Exempt one game** — Pick a favorite that ignores cooldowns and idles forever
+- **📲 Telegram notifications** — Optional bot pings on stop/resume + daily midnight stats
 - **🔍 Search & filter** — Type `/` to search by name, `T` to cycle owned / free / family-shared
 - **👨‍👧 Family-shared library** — Idle games shared with you, tagged with a `↪` badge
 - **📊 Real-time tracking** — Watch numbers go up. Dopamine achieved.
@@ -41,8 +42,9 @@ npm install -g @louisraetz/steamidled
 ## 🎮 Usage
 
 ```bash
-steamidled              # Interactive mode
-steamidled --headless   # Headless mode (auto-start favorites)
+steamidled                  # Interactive mode
+steamidled --headless       # Headless mode (auto-start favorites)
+steamidled --setup-telegram # (Re)configure Telegram notifications
 ```
 
 ### Interactive mode
@@ -54,6 +56,16 @@ steamidled --headless   # Headless mode (auto-start favorites)
 ### Headless mode
 
 Automatically logs in and starts idling your favorited games. Perfect for running as a service. Requires running interactively first to log in and set up favorites.
+
+### 📲 Telegram notifications (optional)
+
+Get pings when idling stops/resumes and a daily snapshot at local midnight.
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and grab its token.
+2. The first time you run `steamidled` interactively, it'll ask if you want to configure Telegram. Say yes, paste your token when prompted, send `/start` to your bot in Telegram, and press Enter.
+3. To (re)configure later — e.g. new bot, new chat — run: `steamidled --setup-telegram`.
+
+Token + chat id live in `~/.steam-idler/telegram.json`. Picking "no" the first time stores `{ "disabled": true }` so the prompt won't bother you again.
 
 ## ⌨️ Controls
 
@@ -148,7 +160,8 @@ Everything lives in `~/.steam-idler/`:
 ```
 ~/.steam-idler/
 ├── credentials.json          # Your login token (keep it secret 🤫)
-└── favorites-{username}.json # Your favorites + exempt game pick
+├── favorites-{username}.json # Your favorites + exempt game pick
+└── telegram.json             # Optional Telegram bot token + chat id
 ```
 
 ## 📋 Requirements

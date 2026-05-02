@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import * as readline from 'node:readline';
+import { confirm } from '@inquirer/prompts';
+import chalk from 'chalk';
 import { SteamClient } from './steam/client.js';
 import {
   loginWithQR,
@@ -19,14 +21,20 @@ import {
   showError,
 } from './ui/display.js';
 import { loadFavorites, loadExempt } from './storage/favorites.js';
+import { loadCredentials } from './storage/credentials.js';
+import { TelegramNotifier, runTelegramSetup, saveTelegramDisabled } from './notifications/telegram.js';
+import { formatDailyReport } from './notifications/dailyReport.js';
 import ora from 'ora';
 import type { SteamGame, GameSelection, IdlingGame, LoginResult } from './types/index.js';
 
 const args = process.argv.slice(2);
 const isHeadless = args.includes('--headless');
+const isSetupTelegram = args.includes('--setup-telegram');
 
 const HOURS_MS = 60 * 60 * 1000;
+
 const client = new SteamClient();
+const telegram = new TelegramNotifier();
 let isIdling = false;
 let idlingGames: IdlingGame[] = [];
 let pausedGames: IdlingGame[] = [];
@@ -34,9 +42,13 @@ let pausingGames: IdlingGame[] = [];
 let allGames: SteamGame[] = [];
 let startTime: Date | null = null;
 let updateInterval: NodeJS.Timeout | null = null;
+let midnightTimer: NodeJS.Timeout | null = null;
 let isInEditMode = false;
+let isShuttingDown = false;
+let stopNotified = false; // true once a 🛑 stop message has been sent for the current run
 let accountName: string = '';
 let exemptAppId: number | null = null;
+let dayStartAccumulatedMs = new Map<number, number>();
 
 // 7-30 days, the active idle phase length before a game enters cooldown
 function randomIdlePhaseMs(): number {
@@ -89,8 +101,54 @@ function tickRandomizer(): void {
   }
 }
 
+function msUntilNextMidnight(): number {
+  const next = new Date();
+  next.setDate(next.getDate() + 1);
+  next.setHours(0, 0, 0, 0);
+  return next.getTime() - Date.now();
+}
+
+function scheduleDailyReport(): void {
+  midnightTimer = setTimeout(() => {
+    const report = formatDailyReport(
+      idlingGames,
+      pausedGames,
+      pausingGames,
+      dayStartAccumulatedMs,
+      new Date()
+    );
+    telegram.send(report);
+    snapshotDayStart();
+    scheduleDailyReport();
+  }, msUntilNextMidnight());
+}
+
+// Captures each game's current accumulated playtime for tomorrow's "today gain" calculation
+function snapshotDayStart(): void {
+  dayStartAccumulatedMs.clear();
+  const all = [...idlingGames, ...pausedGames, ...pausingGames];
+  const now = Date.now();
+  for (const game of all) {
+    const isFrozen = game.pauseUntil != null;
+    const live = isFrozen
+      ? game.accumulatedMs
+      : game.accumulatedMs + (now - game.startTime.getTime());
+    dayStartAccumulatedMs.set(game.appid, live);
+  }
+}
+
 // Main entry point that orchestrates the application flow
 async function main(): Promise<void> {
+  if (isSetupTelegram) {
+    try {
+      await runTelegramSetup();
+      process.exit(0);
+    } catch (err) {
+      showError((err as Error).message);
+      process.exit(1);
+    }
+  }
+
   process.on('SIGINT', handleShutdown);
   process.on('SIGTERM', handleShutdown);
 
@@ -167,6 +225,24 @@ async function runInteractive(): Promise<void> {
 
   accountName = loginResult.accountName!;
   showLoginSuccess(accountName);
+
+  if (!telegram.hasFile()) {
+    const wantsTelegram = await confirm({
+      message: 'Configure Telegram notifications now? You can do this later with --setup-telegram.',
+      default: true,
+    });
+    if (wantsTelegram) {
+      try {
+        await runTelegramSetup();
+      } catch (err) {
+        console.log(chalk.yellow(`Telegram setup failed: ${(err as Error).message}`));
+        console.log(chalk.gray('Continuing without notifications. Run --setup-telegram to retry.'));
+      }
+    } else {
+      saveTelegramDisabled();
+    }
+    telegram.reload();
+  }
 
   const spinner = ora('Fetching your game library...').start();
   try {
@@ -463,19 +539,38 @@ function startIdling(games: GameSelection[]): void {
 
   client.onDisconnected((eresult, msg) => {
     console.log(`\nDisconnected from Steam: ${msg} (${eresult})`);
+    telegram.send(`🛑 Idling stopped — disconnected (${eresult}: ${msg})`);
+    stopNotified = true;
     handleShutdown();
   });
 
   client.onError((err) => {
     console.log(`\nSteam error: ${err.message}`);
+    telegram.send(`🛑 Idling stopped — Steam error: ${err.message}`);
+    stopNotified = true;
     handleShutdown();
   });
+
+  snapshotDayStart();
+  scheduleDailyReport();
+
+  const exemptName = exemptAppId
+    ? allGames.find((g) => g.appid === exemptAppId)?.name ?? null
+    : null;
+  const startedSuffix = exemptName ? ` (exempt: ${exemptName})` : '';
+  telegram.send(`▶️ Idling started — ${idlingGames.length} games${startedSuffix}`);
 }
 
 // Graceful shutdown handler that saves state and logs out
 function handleShutdown(): void {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   console.log('\n');
 
+  if (midnightTimer) {
+    clearTimeout(midnightTimer);
+    midnightTimer = null;
+  }
   if (updateInterval) {
     clearInterval(updateInterval);
     updateInterval = null;
@@ -488,6 +583,11 @@ function handleShutdown(): void {
 
   if (client.isLoggedIn) {
     client.logout();
+  }
+
+  // Fallback "quit by user" only fires when no other site has already sent a stop message
+  if (!stopNotified) {
+    telegram.send('🛑 Idling stopped — quit by user');
   }
 
   showGoodbye();
