@@ -23,6 +23,7 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 - **🎯 Idle up to 32 games** — Because Steam said that's the limit and who are we to argue
 - **🎲 Smart cooldowns** — Games cycle between random idle and cooldown phases so playtime totals naturally diverge instead of looking suspiciously identical
 - **♾️ Exempt one game** — Pick a favorite that ignores cooldowns and idles forever
+- **🩹 Auto-resume** — Survives "user playing on another machine" without manual restart
 - **📲 Telegram notifications** — Optional bot pings on stop/resume + daily midnight stats
 - **🔍 Search & filter** — Type `/` to search by name, `T` to cycle owned / free / family-shared
 - **👨‍👧 Family-shared library** — Idle games shared with you, tagged with a `↪` badge

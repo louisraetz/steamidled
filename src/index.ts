@@ -32,6 +32,8 @@ const isHeadless = args.includes('--headless');
 const isSetupTelegram = args.includes('--setup-telegram');
 
 const HOURS_MS = 60 * 60 * 1000;
+const TAKEOVER_ERESULTS = new Set<number>([6, 34]); // LoggedInElsewhere, LogonSessionReplaced
+const RESUME_RETRY_MS = 60_000;
 
 const client = new SteamClient();
 const telegram = new TelegramNotifier();
@@ -42,8 +44,10 @@ let pausingGames: IdlingGame[] = [];
 let allGames: SteamGame[] = [];
 let startTime: Date | null = null;
 let updateInterval: NodeJS.Timeout | null = null;
+let resumeTimer: NodeJS.Timeout | null = null;
 let midnightTimer: NodeJS.Timeout | null = null;
 let isInEditMode = false;
+let isWaitingForResume = false;
 let isShuttingDown = false;
 let stopNotified = false; // true once a 🛑 stop message has been sent for the current run
 let accountName: string = '';
@@ -97,8 +101,85 @@ function tickRandomizer(): void {
   }
   if (mutated) {
     pausingGames = stillCooling;
-    client.setGamesPlaying(idlingGames.map((g) => g.appid));
+    if (!isWaitingForResume) {
+      client.setGamesPlaying(idlingGames.map((g) => g.appid));
+    }
   }
+}
+
+// Recognises both shapes steam-user may surface a session-takeover as: a numeric
+// eresult attached to the error, or the message string itself.
+function isTakeoverError(err: Error & { eresult?: number }): boolean {
+  if (err.eresult !== undefined && TAKEOVER_ERESULTS.has(err.eresult)) return true;
+  return /loggedinelsewhere|logonsessionreplaced/i.test(err.message ?? '');
+}
+
+// Freezes elapsed time and arms the resume poller after a session takeover
+function enterWaitingState(): void {
+  if (isWaitingForResume) return;
+  isWaitingForResume = true;
+  const now = new Date();
+  for (const game of idlingGames) {
+    game.accumulatedMs += now.getTime() - game.startTime.getTime();
+  }
+  if (updateInterval) {
+    clearInterval(updateInterval);
+    updateInterval = null;
+  }
+  showIdlingStatus(idlingGames, pausedGames, pausingGames, true);
+  telegram.send('🛑 Idling stopped — player active on this account elsewhere. Will auto-resume when free.');
+  stopNotified = true;
+  resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
+}
+
+// Tries to log back in with the saved refresh token; loops on takeover, exits on auth failure
+async function attemptResume(): Promise<void> {
+  resumeTimer = null;
+  const credentials = loadCredentials();
+  if (!credentials) {
+    showError('No stored credentials — cannot auto-resume');
+    telegram.send('🛑 Idling stopped — no stored credentials, cannot auto-resume.');
+    stopNotified = true;
+    handleShutdown();
+    return;
+  }
+  try {
+    await client.loginWithRefreshToken(credentials.refreshToken, credentials.accountName);
+    restoreIdling();
+  } catch (err) {
+    const e = err as Error & { eresult?: number };
+    // Still locked out — schedule another retry without giving up
+    if (isTakeoverError(e)) {
+      resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
+      return;
+    }
+    const message = e.message ?? '';
+    if (/refresh token|access denied|invalid|expired/i.test(message)) {
+      showError(`Resume failed: ${message}`);
+      telegram.send(`🛑 Idling stopped — auto-resume failed: ${message}`);
+      stopNotified = true;
+      handleShutdown();
+      return;
+    }
+    resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
+  }
+}
+
+// Re-establishes the gamesPlayed list and resumes the normal display loop
+function restoreIdling(): void {
+  isWaitingForResume = false;
+  stopNotified = false; // reset so the next stop event sends a fresh message
+  const now = new Date();
+  for (const game of idlingGames) game.startTime = now;
+  client.setGamesPlaying(idlingGames.map((g) => g.appid));
+  showIdlingStatus(idlingGames, pausedGames, pausingGames);
+  updateInterval = setInterval(() => {
+    if (startTime && !isInEditMode) {
+      tickRandomizer();
+      showIdlingStatus(idlingGames, pausedGames, pausingGames);
+    }
+  }, 60000);
+  telegram.send(`▶️ Idling resumed — ${idlingGames.length} games`);
 }
 
 function msUntilNextMidnight(): number {
@@ -115,7 +196,8 @@ function scheduleDailyReport(): void {
       pausedGames,
       pausingGames,
       dayStartAccumulatedMs,
-      new Date()
+      new Date(),
+      isWaitingForResume
     );
     telegram.send(report);
     snapshotDayStart();
@@ -129,7 +211,7 @@ function snapshotDayStart(): void {
   const all = [...idlingGames, ...pausedGames, ...pausingGames];
   const now = Date.now();
   for (const game of all) {
-    const isFrozen = game.pauseUntil != null;
+    const isFrozen = isWaitingForResume || game.pauseUntil != null;
     const live = isFrozen
       ? game.accumulatedMs
       : game.accumulatedMs + (now - game.startTime.getTime());
@@ -345,6 +427,10 @@ function getGameCurrentSelection(): GameSelection[] {
 
 // Handles edit mode for changing game selection while idling
 async function enterEditMode(): Promise<void> {
+  if (isWaitingForResume) {
+    showError('Edit disabled while waiting for resume');
+    return;
+  }
   isInEditMode = true;
 
   if (updateInterval) {
@@ -433,7 +519,9 @@ async function enterEditMode(): Promise<void> {
     pausingGames = keptPausingGames;
     exemptAppId = newExemptAppId;
 
-    client.setGamesPlaying(idlingGames.map((g) => g.appid));
+    if (!isWaitingForResume) {
+      client.setGamesPlaying(idlingGames.map((g) => g.appid));
+    }
   }
 
   if (process.stdin.isTTY) {
@@ -538,6 +626,10 @@ function startIdling(games: GameSelection[]): void {
   client.onPlayingState(handlePlayingState);
 
   client.onDisconnected((eresult, msg) => {
+    if (TAKEOVER_ERESULTS.has(eresult)) {
+      enterWaitingState();
+      return;
+    }
     console.log(`\nDisconnected from Steam: ${msg} (${eresult})`);
     telegram.send(`🛑 Idling stopped — disconnected (${eresult}: ${msg})`);
     stopNotified = true;
@@ -545,6 +637,10 @@ function startIdling(games: GameSelection[]): void {
   });
 
   client.onError((err) => {
+    if (isTakeoverError(err)) {
+      enterWaitingState();
+      return;
+    }
     console.log(`\nSteam error: ${err.message}`);
     telegram.send(`🛑 Idling stopped — Steam error: ${err.message}`);
     stopNotified = true;
@@ -567,6 +663,10 @@ function handleShutdown(): void {
   isShuttingDown = true;
   console.log('\n');
 
+  if (resumeTimer) {
+    clearTimeout(resumeTimer);
+    resumeTimer = null;
+  }
   if (midnightTimer) {
     clearTimeout(midnightTimer);
     midnightTimer = null;

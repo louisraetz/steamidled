@@ -74,11 +74,17 @@ function formatCooldownLabel(pauseUntil: Date | null): string {
 export function showIdlingStatus(
   idlingGames: IdlingGame[],
   pausedGames: IdlingGame[] = [],
-  pausingGames: IdlingGame[] = []
+  pausingGames: IdlingGame[] = [],
+  isWaiting = false
 ): void {
   console.clear();
 
-  console.log(chalk.cyan.bold('\n  Steam Game Time Idler - Idling\n'));
+  if (isWaiting) {
+    console.log(chalk.yellow.bold('\n  Steam Game Time Idler — WAITING TO RESUME\n'));
+    console.log(chalk.yellow('  Player is active on this Steam account elsewhere. Retrying every 60s.\n'));
+  } else {
+    console.log(chalk.cyan.bold('\n  Steam Game Time Idler - Idling\n'));
+  }
 
   const table = new Table({
     head: [
@@ -133,7 +139,11 @@ export function showIdlingStatus(
       suffix +
       '\n'
   );
-  console.log(chalk.gray("  Press 'E' to edit games | 'Q' to quit\n"));
+  if (isWaiting) {
+    console.log(chalk.gray("  Press 'Q' to quit — edit disabled while waiting\n"));
+  } else {
+    console.log(chalk.gray("  Press 'E' to edit games | 'Q' to quit\n"));
+  }
 }
 
 // Displays a success message after login
