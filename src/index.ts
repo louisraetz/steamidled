@@ -34,6 +34,8 @@ const isSetupTelegram = args.includes('--setup-telegram');
 const HOURS_MS = 60 * 60 * 1000;
 const TAKEOVER_ERESULTS = new Set<number>([6, 34]); // LoggedInElsewhere, LogonSessionReplaced
 const RESUME_RETRY_MS = 60_000;
+const AUTH_FAILURE_RETRY_LIMIT = 15;
+const GENERAL_FAILURE_RETRY_LIMIT = 30;
 
 const client = new SteamClient();
 const telegram = new TelegramNotifier();
@@ -53,6 +55,8 @@ let stopNotified = false; // true once a 🛑 stop message has been sent for the
 let accountName: string = '';
 let exemptAppId: number | null = null;
 let dayStartAccumulatedMs = new Map<number, number>();
+let authFailureCount = 0;
+let generalFailureCount = 0;
 
 // 7-30 days, the active idle phase length before a game enters cooldown
 function randomIdlePhaseMs(): number {
@@ -114,8 +118,8 @@ function isTakeoverError(err: Error & { eresult?: number }): boolean {
   return /loggedinelsewhere|logonsessionreplaced/i.test(err.message ?? '');
 }
 
-// Freezes elapsed time and arms the resume poller after a session takeover
-function enterWaitingState(): void {
+// Freezes elapsed time and arms the resume poller after any disconnect or Steam error
+function enterWaitingState(reason: string): void {
   if (isWaitingForResume) return;
   isWaitingForResume = true;
   const now = new Date();
@@ -127,12 +131,12 @@ function enterWaitingState(): void {
     updateInterval = null;
   }
   showIdlingStatus(idlingGames, pausedGames, pausingGames, true);
-  telegram.send('🛑 Idling stopped — player active on this account elsewhere. Will auto-resume when free.');
+  telegram.send(`🛑 Idling paused — ${reason}. Auto-retrying every 60s.`);
   stopNotified = true;
   resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
 }
 
-// Tries to log back in with the saved refresh token; loops on takeover, exits on auth failure
+// Tries to log back in with the saved refresh token; bounded retries for both auth and generic errors
 async function attemptResume(): Promise<void> {
   resumeTimer = null;
   const credentials = loadCredentials();
@@ -145,21 +149,36 @@ async function attemptResume(): Promise<void> {
   }
   try {
     await client.loginWithRefreshToken(credentials.refreshToken, credentials.accountName);
+    authFailureCount = 0;
+    generalFailureCount = 0;
     restoreIdling();
   } catch (err) {
     const e = err as Error & { eresult?: number };
-    // Still locked out — schedule another retry without giving up
-    if (isTakeoverError(e)) {
-      resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
-      return;
-    }
     const message = e.message ?? '';
-    if (/refresh token|access denied|invalid|expired/i.test(message)) {
-      showError(`Resume failed: ${message}`);
-      telegram.send(`🛑 Idling stopped — auto-resume failed: ${message}`);
-      stopNotified = true;
-      handleShutdown();
-      return;
+    const isAuthFailure = /refresh token|access denied|invalid|expired/i.test(message);
+
+    if (isAuthFailure) {
+      authFailureCount += 1;
+      if (authFailureCount >= AUTH_FAILURE_RETRY_LIMIT) {
+        showError(`Resume failed after ${AUTH_FAILURE_RETRY_LIMIT} auth attempts: ${message}`);
+        telegram.send(
+          `🛑 Idling stopped — auth failed ${AUTH_FAILURE_RETRY_LIMIT}× (${message}). Manual re-login required.`
+        );
+        stopNotified = true;
+        handleShutdown();
+        return;
+      }
+    } else {
+      generalFailureCount += 1;
+      if (generalFailureCount >= GENERAL_FAILURE_RETRY_LIMIT) {
+        showError(`Resume failed after ${GENERAL_FAILURE_RETRY_LIMIT} attempts: ${message}`);
+        telegram.send(
+          `🛑 Idling stopped — failed to reconnect after ${GENERAL_FAILURE_RETRY_LIMIT}× (last error: ${message || 'unknown'}).`
+        );
+        stopNotified = true;
+        handleShutdown();
+        return;
+      }
     }
     resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
   }
@@ -169,6 +188,8 @@ async function attemptResume(): Promise<void> {
 function restoreIdling(): void {
   isWaitingForResume = false;
   stopNotified = false; // reset so the next stop event sends a fresh message
+  authFailureCount = 0;
+  generalFailureCount = 0;
   const now = new Date();
   for (const game of idlingGames) game.startTime = now;
   client.setGamesPlaying(idlingGames.map((g) => g.appid));
@@ -626,25 +647,19 @@ function startIdling(games: GameSelection[]): void {
   client.onPlayingState(handlePlayingState);
 
   client.onDisconnected((eresult, msg) => {
-    if (TAKEOVER_ERESULTS.has(eresult)) {
-      enterWaitingState();
-      return;
-    }
+    const reason = TAKEOVER_ERESULTS.has(eresult)
+      ? 'player active on this account elsewhere'
+      : `disconnected (${msg}, eresult ${eresult})`;
     console.log(`\nDisconnected from Steam: ${msg} (${eresult})`);
-    telegram.send(`🛑 Idling stopped — disconnected (${eresult}: ${msg})`);
-    stopNotified = true;
-    handleShutdown();
+    enterWaitingState(reason);
   });
 
   client.onError((err) => {
-    if (isTakeoverError(err)) {
-      enterWaitingState();
-      return;
-    }
+    const reason = isTakeoverError(err)
+      ? 'player active on this account elsewhere'
+      : `Steam error: ${err.message}`;
     console.log(`\nSteam error: ${err.message}`);
-    telegram.send(`🛑 Idling stopped — Steam error: ${err.message}`);
-    stopNotified = true;
-    handleShutdown();
+    enterWaitingState(reason);
   });
 
   snapshotDayStart();
