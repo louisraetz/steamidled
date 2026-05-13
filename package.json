@@ -1,16 +1,24 @@
 {
   "name": "@louisraetz/steamidled",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "Steam game idler CLI and daemon - idle games and accumulate playtime",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "steamidled": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js"
+    "dev": "tsc && node dist/index.js",
+    "prepublishOnly": "tsc"
   },
   "keywords": [
     "steam",
