@@ -139,6 +139,19 @@ function enterWaitingState(reason: string): void {
 // Tries to log back in with the saved refresh token; bounded retries for both auth and generic errors
 async function attemptResume(): Promise<void> {
   resumeTimer = null;
+
+  // steam-user has autoRelogin: true and may have silently reconnected on its
+  // own between the disconnect event and this timer firing. Calling logOn
+  // again in that state throws "Already logged on" from inside a nextTick
+  // async function — an unhandled rejection that crashes the process. Detect
+  // it here and just restore.
+  if (client.isConnected) {
+    authFailureCount = 0;
+    generalFailureCount = 0;
+    restoreIdling();
+    return;
+  }
+
   const credentials = loadCredentials();
   if (!credentials) {
     showError('No stored credentials — cannot auto-resume');
@@ -660,6 +673,21 @@ function startIdling(games: GameSelection[]): void {
       : `Steam error: ${err.message}`;
     console.log(`\nSteam error: ${err.message}`);
     enterWaitingState(reason);
+  });
+
+  // Catches steam-user's silent auto-relogins so we restore idling promptly
+  // instead of waiting for the 60s attemptResume tick (which would then race
+  // with the now-connected client and crash).
+  client.onLoggedOn(() => {
+    if (isWaitingForResume) {
+      if (resumeTimer) {
+        clearTimeout(resumeTimer);
+        resumeTimer = null;
+      }
+      authFailureCount = 0;
+      generalFailureCount = 0;
+      restoreIdling();
+    }
   });
 
   snapshotDayStart();

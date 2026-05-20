@@ -15,10 +15,30 @@ export class SteamClient {
     this.client.on('ownershipCached', () => {
       this._ownershipCached = true;
     });
+
+    // Persistent listeners so we observe every logon (including steam-user's
+    // own autoRelogin) and every disconnect, not just those bracketing an
+    // explicit login call. Without these, an internal auto-reconnect would
+    // leave steam-user holding a session while our code still believed it was
+    // disconnected — and a subsequent manual logOn would throw synchronously
+    // inside process.nextTick (uncatchable, crashes the process).
+    this.client.on('loggedOn', () => {
+      this._isLoggedIn = true;
+    });
+
+    this.client.on('disconnected', () => {
+      this._isLoggedIn = false;
+    });
   }
 
   get isLoggedIn(): boolean {
     return this._isLoggedIn;
+  }
+
+  // True whenever steam-user currently holds a session, regardless of which
+  // code path established it. Source of truth for "is logOn safe to call".
+  get isConnected(): boolean {
+    return this.client.steamID != null;
   }
 
   get accountName(): string | null {
@@ -249,6 +269,12 @@ export class SteamClient {
   // Registers a callback for disconnect events
   onDisconnected(callback: (eresult: number, msg: string) => void): void {
     this.client.on('disconnected', callback);
+  }
+
+  // Registers a callback for every successful logon, including steam-user's
+  // internal auto-relogins after a transient disconnect.
+  onLoggedOn(callback: () => void): void {
+    this.client.on('loggedOn', callback);
   }
 
   // Registers a callback for error events
