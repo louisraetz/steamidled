@@ -165,8 +165,3 @@ export function showGoodbye(): void {
 export function showError(message: string): void {
   console.log(chalk.red(`\n  Error: ${message}\n`));
 }
-
-// Displays an informational message
-export function showInfo(message: string): void {
-  console.log(chalk.blue(`\n  ${message}\n`));
-}

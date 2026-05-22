@@ -341,7 +341,7 @@ export async function selectGames(
         const selectedGames = selectableGames
           .filter((g) => g.isFavorite)
           .map((g) => ({ appid: g.appid, name: g.name }));
-        resolve({ selectedGames, quickStart: true, exemptAppId: currentExempt });
+        resolve({ selectedGames, exemptAppId: currentExempt });
         return;
       }
 
@@ -350,7 +350,7 @@ export async function selectGames(
         const selectedGames = selectableGames
           .filter((g) => g.selected)
           .map((g) => ({ appid: g.appid, name: g.name }));
-        resolve({ selectedGames, quickStart: false, exemptAppId: currentExempt });
+        resolve({ selectedGames, exemptAppId: currentExempt });
         return;
       }
     };
