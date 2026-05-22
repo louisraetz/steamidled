@@ -3,6 +3,7 @@
 import * as readline from 'node:readline';
 import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
+import SteamUser from 'steam-user';
 import { SteamClient } from './steam/client.js';
 import {
   loginWithQR,
@@ -34,8 +35,31 @@ const isSetupTelegram = args.includes('--setup-telegram');
 const HOURS_MS = 60 * 60 * 1000;
 const TAKEOVER_ERESULTS = new Set<number>([6, 34]); // LoggedInElsewhere, LogonSessionReplaced
 const RESUME_RETRY_MS = 60_000;
-const AUTH_FAILURE_RETRY_LIMIT = 15;
 const GENERAL_FAILURE_RETRY_LIMIT = 30;
+const RATE_LIMIT_RETRY_LIMIT = 10;
+// EResults that auto-resume can never fix — credential-bad, account-level, or
+// protocol mismatch. Stop fast and require manual action instead of retrying.
+const TERMINAL_ERESULTS = new Set<number>([
+  5, 15, 26, 27, 126, // InvalidPassword, AccessDenied, Revoked, Expired, CachedCredentialInvalid
+  17, 43, 51, 69, 73, 95, 114, // Banned, AccountDisabled, Suspended, ParentalControlRestricted, AccountLockedDown, AccountLimitExceeded, AccountDeleted
+  7, 119, 120, // InvalidProtocolVer, LauncherMigrated, SteamRealmMismatch
+]);
+// EResults from logging in too often — back off hard, never hammer (a fast retry
+// escalates the Steam lockout from 30min to hours to 24h).
+const RATE_LIMIT_ERESULTS = new Set<number>([84, 87]); // RateLimitExceeded, AccountLoginDeniedThrottle
+const BACKOFF_BASE_MS = 60_000;
+const BACKOFF_CAP_MS = 15 * 60 * 1000;
+const RATE_LIMIT_BACKOFF_CAP_MS = 30 * 60 * 1000;
+// Periodic relog to force a playtime commit (clean logOff). Caps worst-case loss
+// at this interval instead of the whole session.
+const FLUSH_INTERVAL_MS = 4 * HOURS_MS;
+// Watchdog that checks server playtime is actually climbing. Must exceed the
+// ~30min commit lore to avoid false positives.
+const ZOMBIE_CHECK_INTERVAL_MS = 90 * 60 * 1000;
+// Grace before exit so a clean logOff socket write (and Telegram fetch) can land.
+const CRASH_FLUSH_GRACE_MS = 2000;
+const SHUTDOWN_FLUSH_GRACE_MS = 1500;
+const TAKEOVER_DRIFT_DELAY_MS = 120_000;
 
 const client = new SteamClient();
 const telegram = new TelegramNotifier();
@@ -44,10 +68,13 @@ let idlingGames: IdlingGame[] = [];
 let pausedGames: IdlingGame[] = [];
 let pausingGames: IdlingGame[] = [];
 let allGames: SteamGame[] = [];
+let gamesById = new Map<number, SteamGame>();
 let startTime: Date | null = null;
 let updateInterval: NodeJS.Timeout | null = null;
 let resumeTimer: NodeJS.Timeout | null = null;
 let midnightTimer: NodeJS.Timeout | null = null;
+let flushTimer: NodeJS.Timeout | null = null;
+let zombieTimer: NodeJS.Timeout | null = null;
 let isInEditMode = false;
 let isWaitingForResume = false;
 let isShuttingDown = false;
@@ -55,8 +82,20 @@ let stopNotified = false; // true once a 🛑 stop message has been sent for the
 let accountName: string = '';
 let exemptAppId: number | null = null;
 let dayStartAccumulatedMs = new Map<number, number>();
-let authFailureCount = 0;
-let generalFailureCount = 0;
+let transientFailureCount = 0;
+let rateLimitCount = 0;
+// Set immediately before a self-initiated relog (periodic flush or zombie
+// recovery). Suppresses the 🛑/▶️ Telegram pair for the relog cycle; cleared in
+// restoreIdling once the session is back.
+let selfInitiatedRelog = false;
+// Last successful single-app playtime probe (zombie watchdog). Doubles as the
+// "last known good" baseline for post-takeover drift reporting.
+let zombieBaseline: { appid: number; playtime: number; at: number } | null = null;
+let lastGoodPlaytime: { appid: number; playtime: number } | null = null;
+let takeoverDriftPending = false;
+// Consecutive zombie checks with flat server playtime (two-strike: the first
+// flat reading triggers a flush relog, only a second confirms a real zombie).
+let zombieStrike = 0;
 
 // 7-30 days, the active idle phase length before a game enters cooldown
 function randomIdlePhaseMs(): number {
@@ -66,6 +105,12 @@ function randomIdlePhaseMs(): number {
 // 100-200 hours, the cooldown length before a game rejoins the idle pool
 function randomCooldownMs(): number {
   return Math.floor((100 + Math.random() * 100) * HOURS_MS);
+}
+
+// Exponential backoff with full jitter; attempt is 1-based.
+function backoffMs(attempt: number, capMs: number): number {
+  const exp = Math.min(capMs, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1));
+  return Math.floor(exp / 2 + Math.random() * (exp / 2));
 }
 
 // Moves games between idling/pausing arrays based on per-game random schedules
@@ -131,8 +176,12 @@ function enterWaitingState(reason: string): void {
     updateInterval = null;
   }
   showIdlingStatus(idlingGames, pausedGames, pausingGames, true);
-  telegram.send(`🛑 Idling paused — ${reason}. Auto-retrying every 60s.`);
-  stopNotified = true;
+  // A self-initiated relog (flush/zombie recovery) suppresses the pause message;
+  // restoreIdling emits a single quiet "🔄 flush" line instead.
+  if (!selfInitiatedRelog) {
+    telegram.send(`🛑 Idling paused — ${reason}. Auto-retrying every 60s.`);
+    stopNotified = true;
+  }
   resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
 }
 
@@ -146,8 +195,8 @@ async function attemptResume(): Promise<void> {
   // async function — an unhandled rejection that crashes the process. Detect
   // it here and just restore.
   if (client.isConnected) {
-    authFailureCount = 0;
-    generalFailureCount = 0;
+    transientFailureCount = 0;
+    rateLimitCount = 0;
     restoreIdling();
     return;
   }
@@ -157,52 +206,75 @@ async function attemptResume(): Promise<void> {
     showError('No stored credentials — cannot auto-resume');
     telegram.send('🛑 Idling stopped — no stored credentials, cannot auto-resume.');
     stopNotified = true;
-    handleShutdown();
+    handleShutdown(0);
     return;
   }
   try {
     await client.loginWithRefreshToken(credentials.refreshToken, credentials.accountName);
-    authFailureCount = 0;
-    generalFailureCount = 0;
+    transientFailureCount = 0;
+    rateLimitCount = 0;
     restoreIdling();
   } catch (err) {
     const e = err as Error & { eresult?: number };
-    const message = e.message ?? '';
-    const isAuthFailure = /refresh token|access denied|invalid|expired/i.test(message);
+    const code = e.eresult;
+    const label =
+      code !== undefined ? SteamUser.EResult[code] ?? `eresult ${code}` : e.message || 'unknown';
 
-    if (isAuthFailure) {
-      authFailureCount += 1;
-      if (authFailureCount >= AUTH_FAILURE_RETRY_LIMIT) {
-        showError(`Resume failed after ${AUTH_FAILURE_RETRY_LIMIT} auth attempts: ${message}`);
-        telegram.send(
-          `🛑 Idling stopped — auth failed ${AUTH_FAILURE_RETRY_LIMIT}× (${message}). Manual re-login required.`
-        );
-        stopNotified = true;
-        handleShutdown();
-        return;
-      }
-    } else {
-      generalFailureCount += 1;
-      if (generalFailureCount >= GENERAL_FAILURE_RETRY_LIMIT) {
-        showError(`Resume failed after ${GENERAL_FAILURE_RETRY_LIMIT} attempts: ${message}`);
-        telegram.send(
-          `🛑 Idling stopped — failed to reconnect after ${GENERAL_FAILURE_RETRY_LIMIT}× (last error: ${message || 'unknown'}).`
-        );
-        stopNotified = true;
-        handleShutdown();
-        return;
-      }
+    // Terminal: auto-resume can never fix it (bad credentials, account-level
+    // block, or protocol mismatch). Stop cleanly and require manual action.
+    // Exit 0 so a systemd unit does not restart-loop a permanent failure.
+    if (code !== undefined && TERMINAL_ERESULTS.has(code)) {
+      showError(`Resume aborted — ${label} is not auto-recoverable. Manual re-login required.`);
+      telegram.send(`🛑 Idling stopped — ${label}. Manual re-login required.`);
+      stopNotified = true;
+      handleShutdown(0);
+      return;
     }
-    resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
+
+    // Rate limited: back off hard. A fixed fast retry escalates the Steam
+    // lockout (30min → hours → 24h), so this is capped much higher than usual.
+    if (code !== undefined && RATE_LIMIT_ERESULTS.has(code)) {
+      rateLimitCount += 1;
+      if (rateLimitCount >= RATE_LIMIT_RETRY_LIMIT) {
+        showError(`Resume failed after ${RATE_LIMIT_RETRY_LIMIT} rate-limited attempts: ${label}`);
+        telegram.send(`🛑 Idling stopped — rate-limited ${RATE_LIMIT_RETRY_LIMIT}× (${label}).`);
+        stopNotified = true;
+        handleShutdown(1);
+        return;
+      }
+      resumeTimer = setTimeout(attemptResume, backoffMs(rateLimitCount, RATE_LIMIT_BACKOFF_CAP_MS));
+      return;
+    }
+
+    // Transient/network: bounded retries with exponential backoff.
+    transientFailureCount += 1;
+    if (transientFailureCount >= GENERAL_FAILURE_RETRY_LIMIT) {
+      showError(`Resume failed after ${GENERAL_FAILURE_RETRY_LIMIT} attempts: ${label}`);
+      telegram.send(
+        `🛑 Idling stopped — failed to reconnect after ${GENERAL_FAILURE_RETRY_LIMIT}× (last error: ${label}).`
+      );
+      stopNotified = true;
+      handleShutdown(1);
+      return;
+    }
+    resumeTimer = setTimeout(attemptResume, backoffMs(transientFailureCount, BACKOFF_CAP_MS));
   }
 }
 
-// Re-establishes the gamesPlayed list and resumes the normal display loop
+// Re-establishes the gamesPlayed list and resumes the normal display loop.
+// Idempotent: attemptResume's await and the onLoggedOn auto-relogin callback
+// can race to call this; the guard prevents a duplicate resume (which would
+// orphan the previous interval and send a second "resumed" notification).
 function restoreIdling(): void {
+  if (!isWaitingForResume) return;
   isWaitingForResume = false;
   stopNotified = false; // reset so the next stop event sends a fresh message
-  authFailureCount = 0;
-  generalFailureCount = 0;
+  transientFailureCount = 0;
+  rateLimitCount = 0;
+  if (updateInterval) {
+    clearInterval(updateInterval);
+    updateInterval = null;
+  }
   const now = new Date();
   for (const game of idlingGames) game.startTime = now;
   client.setGamesPlaying(idlingGames.map((g) => g.appid));
@@ -213,7 +285,38 @@ function restoreIdling(): void {
       showIdlingStatus(idlingGames, pausedGames, pausingGames);
     }
   }, 60000);
-  telegram.send(`▶️ Idling resumed — ${idlingGames.length} games`);
+
+  if (selfInitiatedRelog) {
+    selfInitiatedRelog = false;
+    telegram.send('🔄 flush — playtime committed, session refreshed');
+  } else {
+    telegram.send(`▶️ Idling resumed — ${idlingGames.length} games`);
+  }
+
+  if (takeoverDriftPending) {
+    if (lastGoodPlaytime) reportTakeoverDrift(lastGoodPlaytime);
+    takeoverDriftPending = false;
+  }
+}
+
+// One-shot, delayed comparison of the server's committed playtime against the
+// last known-good value, to quantify how much of the pre-takeover tail survived.
+// Observability only; reuses the zombie watchdog's baseline.
+function reportTakeoverDrift(lastGood: { appid: number; playtime: number }): void {
+  setTimeout(async () => {
+    try {
+      const now = await client.getPlaytimeForever(lastGood.appid);
+      if (now === null) return;
+      const delta = now - lastGood.playtime;
+      const name = gamesById.get(lastGood.appid)?.name ?? `App ${lastGood.appid}`;
+      const sign = delta >= 0 ? '+' : '';
+      telegram.send(
+        `📊 Post-takeover commit check (${name}): last-known ${lastGood.playtime}m → now ${now}m (Δ${sign}${delta}m).`
+      );
+    } catch {
+      // Best-effort observability — a failed probe is not worth surfacing.
+    }
+  }, TAKEOVER_DRIFT_DELAY_MS);
 }
 
 function msUntilNextMidnight(): number {
@@ -253,6 +356,111 @@ function snapshotDayStart(): void {
   }
 }
 
+// Shared self-initiated relog used by the periodic flush and zombie recovery. A
+// clean logOff commits the in-flight idle session; the disconnect→loggedOn
+// handlers restore idling and clear the suppression flag.
+function forceFlushRelog(): void {
+  if (!client.isConnected) return;
+  selfInitiatedRelog = true;
+  try {
+    client.relog();
+  } catch {
+    selfInitiatedRelog = false;
+  }
+}
+
+// Mitigation A: periodically force a clean logOff+reconnect so the server folds
+// the in-flight idle session into playtime_forever. Caps worst-case loss at
+// FLUSH_INTERVAL_MS. Self-reschedules.
+function scheduleFlush(): void {
+  flushTimer = setTimeout(() => {
+    const idle = !isWaitingForResume && !isInEditMode && !isShuttingDown;
+    if (idle && idlingGames.length > 0) {
+      forceFlushRelog();
+    }
+    scheduleFlush();
+  }, FLUSH_INTERVAL_MS);
+}
+
+// Picks the app to probe: stick with the current baseline app while it is still
+// continuously idling, otherwise fall back to the first idling game (which forces
+// a re-baseline rather than a false zombie verdict).
+function pickProbeApp(): IdlingGame | null {
+  if (zombieBaseline) {
+    const still = idlingGames.find((g) => g.appid === zombieBaseline!.appid);
+    if (still) return still;
+  }
+  return idlingGames[0] ?? null;
+}
+
+// Mitigation B: confirm the server's playtime is actually climbing for a
+// continuously-idled app. If a full window passes with no increase, commits are
+// silently dying (zombie session) → alert + force a relog. Self-reschedules.
+async function runZombieCheck(): Promise<void> {
+  if (isWaitingForResume || isInEditMode || isShuttingDown || !client.isConnected) return;
+  if (idlingGames.length === 0) {
+    zombieBaseline = null;
+    return;
+  }
+
+  const probe = pickProbeApp();
+  if (!probe) {
+    zombieBaseline = null;
+    return;
+  }
+
+  let playtime: number | null;
+  try {
+    playtime = await client.getPlaytimeForever(probe.appid);
+  } catch {
+    return; // transient fetch error — keep the baseline, try again next tick
+  }
+  if (playtime === null) {
+    zombieBaseline = null; // inconclusive (app absent from response)
+    return;
+  }
+
+  const now = Date.now();
+
+  if (!zombieBaseline || zombieBaseline.appid !== probe.appid) {
+    zombieBaseline = { appid: probe.appid, playtime, at: now };
+    lastGoodPlaytime = { appid: probe.appid, playtime };
+    zombieStrike = 0;
+    return;
+  }
+
+  if (playtime > zombieBaseline.playtime) {
+    zombieBaseline = { appid: probe.appid, playtime, at: now };
+    lastGoodPlaytime = { appid: probe.appid, playtime };
+    zombieStrike = 0;
+    return;
+  }
+
+  // Same app, continuously idling, a full window with no server-side increase.
+  if (zombieStrike === 0) {
+    // First strike: a healthy session may just be slow to commit. Force a flush
+    // relog (which commits) and re-check next window before alarming. Keep the
+    // baseline so the next probe compares against the same value.
+    zombieStrike = 1;
+    forceFlushRelog();
+    return;
+  }
+
+  // Second strike: a forced relog already failed to produce a commit → real
+  // zombie. Alert and force another reconnect, then reset.
+  telegram.send('⚠️ Zombie session — playtime not committing after a relog. Forcing reconnect.');
+  zombieStrike = 0;
+  zombieBaseline = null;
+  forceFlushRelog();
+}
+
+function scheduleZombieCheck(): void {
+  zombieTimer = setTimeout(async () => {
+    await runZombieCheck();
+    scheduleZombieCheck();
+  }, ZOMBIE_CHECK_INTERVAL_MS);
+}
+
 // Main entry point that orchestrates the application flow
 async function main(): Promise<void> {
   if (isSetupTelegram) {
@@ -265,8 +473,10 @@ async function main(): Promise<void> {
     }
   }
 
-  process.on('SIGINT', handleShutdown);
-  process.on('SIGTERM', handleShutdown);
+  process.on('SIGINT', () => handleShutdown(0));
+  process.on('SIGTERM', () => handleShutdown(0));
+  process.on('uncaughtException', handleCrash);
+  process.on('unhandledRejection', handleCrash);
 
   if (isHeadless) {
     await runHeadless();
@@ -297,6 +507,7 @@ async function runHeadless(): Promise<void> {
   const gamesSpinner = ora('Fetching your game library...').start();
   try {
     allGames = await client.getOwnedGames();
+    gamesById = new Map(allGames.map((g) => [g.appid, g]));
     gamesSpinner.succeed(`Found ${allGames.length} games`);
   } catch (err) {
     gamesSpinner.fail('Failed to fetch games');
@@ -322,7 +533,7 @@ async function runHeadless(): Promise<void> {
   }
 
   const exemptName = exemptAppId
-    ? allGames.find((g) => g.appid === exemptAppId)?.name ?? null
+    ? gamesById.get(exemptAppId)?.name ?? null
     : null;
   console.log(`Starting ${selectedGames.length} favorite game(s)...`);
   if (exemptName) console.log(`Exempt from randomizer: ${exemptName}`);
@@ -363,6 +574,7 @@ async function runInteractive(): Promise<void> {
   const spinner = ora('Fetching your game library...').start();
   try {
     allGames = await client.getOwnedGames();
+    gamesById = new Map(allGames.map((g) => [g.appid, g]));
     spinner.succeed(`Found ${allGames.length} games in your library`);
   } catch (err) {
     spinner.fail('Failed to fetch games');
@@ -542,7 +754,7 @@ async function enterEditMode(): Promise<void> {
 
     for (const selection of newSelection) {
       if (!oldAppIds.has(selection.appid)) {
-        const steamGame = allGames.find((g) => g.appid === selection.appid);
+        const steamGame = gamesById.get(selection.appid);
         const isExempt = selection.appid === newExemptAppId;
         keptIdlingGames.push(createIdlingGame(selection, steamGame, isExempt));
       }
@@ -637,7 +849,7 @@ function startIdling(games: GameSelection[]): void {
   startTime = new Date();
 
   idlingGames = games.map((game) => {
-    const steamGame = allGames.find((g) => g.appid === game.appid);
+    const steamGame = gamesById.get(game.appid);
     return createIdlingGame(game, steamGame, game.appid === exemptAppId);
   });
   pausedGames = [];
@@ -660,7 +872,9 @@ function startIdling(games: GameSelection[]): void {
   client.onPlayingState(handlePlayingState);
 
   client.onDisconnected((eresult, msg) => {
-    const reason = TAKEOVER_ERESULTS.has(eresult)
+    const isTakeover = TAKEOVER_ERESULTS.has(eresult);
+    if (isTakeover && !selfInitiatedRelog && lastGoodPlaytime) takeoverDriftPending = true;
+    const reason = isTakeover
       ? 'player active on this account elsewhere'
       : `disconnected (${msg}, eresult ${eresult})`;
     console.log(`\nDisconnected from Steam: ${msg} (${eresult})`);
@@ -668,7 +882,9 @@ function startIdling(games: GameSelection[]): void {
   });
 
   client.onError((err) => {
-    const reason = isTakeoverError(err)
+    const isTakeover = isTakeoverError(err);
+    if (isTakeover && !selfInitiatedRelog && lastGoodPlaytime) takeoverDriftPending = true;
+    const reason = isTakeover
       ? 'player active on this account elsewhere'
       : `Steam error: ${err.message}`;
     console.log(`\nSteam error: ${err.message}`);
@@ -684,24 +900,27 @@ function startIdling(games: GameSelection[]): void {
         clearTimeout(resumeTimer);
         resumeTimer = null;
       }
-      authFailureCount = 0;
-      generalFailureCount = 0;
+      transientFailureCount = 0;
+      rateLimitCount = 0;
       restoreIdling();
     }
   });
 
   snapshotDayStart();
   scheduleDailyReport();
+  scheduleFlush();
+  scheduleZombieCheck();
 
   const exemptName = exemptAppId
-    ? allGames.find((g) => g.appid === exemptAppId)?.name ?? null
+    ? gamesById.get(exemptAppId)?.name ?? null
     : null;
   const startedSuffix = exemptName ? ` (exempt: ${exemptName})` : '';
   telegram.send(`▶️ Idling started — ${idlingGames.length} games${startedSuffix}`);
 }
 
-// Graceful shutdown handler that saves state and logs out
-function handleShutdown(): void {
+// Graceful shutdown handler that saves state and logs out. exitCode lets the
+// auto-resume give-up paths signal a restartable failure (1) vs a clean stop (0).
+function handleShutdown(exitCode = 0): void {
   if (isShuttingDown) return;
   isShuttingDown = true;
   console.log('\n');
@@ -713,6 +932,14 @@ function handleShutdown(): void {
   if (midnightTimer) {
     clearTimeout(midnightTimer);
     midnightTimer = null;
+  }
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  if (zombieTimer) {
+    clearTimeout(zombieTimer);
+    zombieTimer = null;
   }
   if (updateInterval) {
     clearInterval(updateInterval);
@@ -734,7 +961,41 @@ function handleShutdown(): void {
   }
 
   showGoodbye();
-  process.exit(0);
+  // Grace so the clean logOff socket write (the playtime-commit trigger) and the
+  // Telegram fetch can land before the process exits.
+  setTimeout(() => process.exit(exitCode), SHUTDOWN_FLUSH_GRACE_MS);
+}
+
+// Mitigation C: last-resort flush on a fatal error. Best-effort stop+logout to
+// salvage the in-flight session's playtime tail before exiting.
+function handleCrash(err: unknown): void {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.error('\nFatal error:', err);
+
+  if (resumeTimer) clearTimeout(resumeTimer);
+  if (midnightTimer) clearTimeout(midnightTimer);
+  if (flushTimer) clearTimeout(flushTimer);
+  if (zombieTimer) clearTimeout(zombieTimer);
+  if (updateInterval) clearInterval(updateInterval);
+
+  try {
+    if (isIdling) client.stopPlaying();
+  } catch {
+    // ignore — best effort
+  }
+  try {
+    if (client.isLoggedIn) client.logout();
+  } catch {
+    // ignore — best effort
+  }
+
+  if (!stopNotified) {
+    const message = err instanceof Error ? err.message : String(err);
+    telegram.send(`🛑 Idling stopped — crashed (${message}).`);
+  }
+
+  setTimeout(() => process.exit(1), CRASH_FLUSH_GRACE_MS);
 }
 
 main().catch((err) => {
