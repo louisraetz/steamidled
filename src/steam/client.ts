@@ -25,6 +25,11 @@ export class SteamClient {
     // inside process.nextTick (uncatchable, crashes the process).
     this.client.on('loggedOn', () => {
       this._isLoggedIn = true;
+      // Persona resets to Offline on every fresh session — including relog and
+      // steam-user's silent autoRelogin, both of which bypass
+      // loginWithRefreshToken. Re-assert Online here so a flush relog never
+      // leaves the account invisible/offline.
+      this.client.setPersona(SteamUser.EPersonaState.Online);
     });
 
     this.client.on('disconnected', () => {
@@ -68,7 +73,7 @@ export class SteamClient {
         if (accountName) {
           this._accountName = accountName;
         }
-        this.client.setPersona(SteamUser.EPersonaState.Online);
+        // Persona is set Online by the persistent constructor 'loggedOn' listener.
         cleanup();
         resolve();
       };
