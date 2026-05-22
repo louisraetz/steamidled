@@ -78,11 +78,14 @@ declare module 'steam-user' {
     picsCache: PicsCache;
 
     static EPersonaState: typeof EPersonaState;
+    // Bi-directional enum; we use the numeric→name direction for error labels.
+    static EResult: Record<number, string>;
 
     constructor(options?: SteamUserOptions);
 
     logOn(details: LogOnDetails): void;
     logOff(): void;
+    relog(): void;
     gamesPlayed(apps: number[] | { game_id: number }[]): void;
     getUserOwnedApps(steamId: SteamID, options?: OwnedAppsOptions): Promise<OwnedAppsResponse>;
     setPersona(state: EPersonaState, name?: string): void;

@@ -14,11 +14,6 @@ export interface StoredCredentials {
   machineName?: string;
 }
 
-export interface IdlingSession {
-  games: SteamGame[];
-  startTime: Date;
-}
-
 export interface LoginResult {
   success: boolean;
   accountName?: string;
@@ -44,6 +39,5 @@ export interface IdlingGame {
 
 export interface GameSelectorResult {
   selectedGames: GameSelection[];
-  quickStart: boolean;
   exemptAppId: number | null;
 }
