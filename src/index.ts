@@ -52,7 +52,7 @@ const BACKOFF_CAP_MS = 15 * 60 * 1000;
 const RATE_LIMIT_BACKOFF_CAP_MS = 30 * 60 * 1000;
 // Periodic relog to force a playtime commit (clean logOff). Caps worst-case loss
 // at this interval instead of the whole session.
-const FLUSH_INTERVAL_MS = 60 * 1000; // TEMP: 1min for testing — revert to 4 * HOURS_MS
+const FLUSH_INTERVAL_MS = 4 * HOURS_MS;
 // Watchdog that checks server playtime is actually climbing. Must exceed the
 // ~30min commit lore to avoid false positives.
 const ZOMBIE_CHECK_INTERVAL_MS = 90 * 60 * 1000;
