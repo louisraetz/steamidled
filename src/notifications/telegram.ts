@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { input, password as passwordPrompt } from '@inquirer/prompts';
@@ -14,11 +14,17 @@ export interface TelegramConfig {
 }
 
 function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
 }
 
 function loadTelegramConfig(): TelegramConfig | null {
   if (!existsSync(CONFIG_PATH)) return null;
+  // Migrate older world-readable files written before 0600 was enforced.
+  try {
+    chmodSync(CONFIG_PATH, 0o600);
+  } catch {
+    // Platforms without POSIX perms (or a perms error) — best effort only.
+  }
   try {
     return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as TelegramConfig;
   } catch {
@@ -29,7 +35,10 @@ function loadTelegramConfig(): TelegramConfig | null {
 // Marks Telegram as explicitly skipped so we don't re-prompt on next interactive run
 export function saveTelegramDisabled(): void {
   ensureConfigDir();
-  writeFileSync(CONFIG_PATH, JSON.stringify({ disabled: true }, null, 2), 'utf-8');
+  writeFileSync(CONFIG_PATH, JSON.stringify({ disabled: true }, null, 2), {
+    encoding: 'utf-8',
+    mode: 0o600,
+  });
 }
 
 export class TelegramNotifier {
@@ -59,6 +68,7 @@ export class TelegramNotifier {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text }),
+      signal: AbortSignal.timeout(5000),
     }).catch((err) => {
       console.error(`[telegram] send failed: ${(err as Error).message}`);
     });
@@ -86,6 +96,9 @@ export async function runTelegramSetup(): Promise<void> {
   const token = await passwordPrompt({ message: 'Bot token:', mask: '*' });
 
   const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+  if (!meRes.ok) {
+    throw new Error(`Telegram getMe failed: HTTP ${meRes.status}`);
+  }
   const me = (await meRes.json()) as GetMeResponse;
   if (!me.ok) {
     throw new Error(`Token rejected by Telegram: ${me.description ?? 'unknown error'}`);
@@ -97,6 +110,9 @@ export async function runTelegramSetup(): Promise<void> {
   await input({ message: 'Press Enter when done' });
 
   const updatesRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?limit=10`);
+  if (!updatesRes.ok) {
+    throw new Error(`Telegram getUpdates failed: HTTP ${updatesRes.status}`);
+  }
   const updates = (await updatesRes.json()) as GetUpdatesResponse;
   if (!updates.ok) {
     throw new Error(`getUpdates failed: ${updates.description ?? 'unknown'}`);
@@ -110,7 +126,7 @@ export async function runTelegramSetup(): Promise<void> {
   writeFileSync(
     CONFIG_PATH,
     JSON.stringify({ token, chatId: String(chatId) }, null, 2),
-    'utf-8'
+    { encoding: 'utf-8', mode: 0o600 }
   );
 
   await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
