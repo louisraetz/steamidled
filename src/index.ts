@@ -35,6 +35,11 @@ const isSetupTelegram = args.includes('--setup-telegram');
 const HOURS_MS = 60 * 60 * 1000;
 const TAKEOVER_ERESULTS = new Set<number>([6, 34]); // LoggedInElsewhere, LogonSessionReplaced
 const RESUME_RETRY_MS = 60_000;
+// A reconnect must hold for this long before we announce "▶️ resumed". While the
+// player is active on the account, every reconnect is kicked again within
+// seconds, so debouncing the notification collapses that flap into a single
+// paused/resumed pair instead of one per 60s retry.
+const RESUME_NOTIFY_GRACE_MS = 90_000;
 const GENERAL_FAILURE_RETRY_LIMIT = 30;
 const RATE_LIMIT_RETRY_LIMIT = 10;
 // EResults that auto-resume can never fix — credential-bad, account-level, or
@@ -72,6 +77,8 @@ let gamesById = new Map<number, SteamGame>();
 let startTime: Date | null = null;
 let updateInterval: NodeJS.Timeout | null = null;
 let resumeTimer: NodeJS.Timeout | null = null;
+// Pending debounced "▶️ resumed" notification (see RESUME_NOTIFY_GRACE_MS).
+let resumeNotifyTimer: NodeJS.Timeout | null = null;
 let midnightTimer: NodeJS.Timeout | null = null;
 let flushTimer: NodeJS.Timeout | null = null;
 let zombieTimer: NodeJS.Timeout | null = null;
@@ -167,6 +174,16 @@ function isTakeoverError(err: Error & { eresult?: number }): boolean {
 function enterWaitingState(reason: string): void {
   if (isWaitingForResume) return;
   isWaitingForResume = true;
+  // If a resume notification is still inside its grace window, the session is
+  // flapping: we reconnected and Steam kicked us again because the player is
+  // still active. This pause episode was already announced, so cancel the
+  // pending resume and stay silent instead of emitting another paused/resumed
+  // pair on every 60s retry.
+  const flapping = resumeNotifyTimer !== null;
+  if (resumeNotifyTimer) {
+    clearTimeout(resumeNotifyTimer);
+    resumeNotifyTimer = null;
+  }
   const now = new Date();
   for (const game of idlingGames) {
     game.accumulatedMs += now.getTime() - game.startTime.getTime();
@@ -178,7 +195,7 @@ function enterWaitingState(reason: string): void {
   showIdlingStatus(idlingGames, pausedGames, pausingGames, true);
   // A self-initiated relog (flush/zombie recovery) suppresses the pause message;
   // restoreIdling emits a single quiet "🔄 flush" line instead.
-  if (!selfInitiatedRelog) {
+  if (!selfInitiatedRelog && !flapping) {
     telegram.send(`🛑 Idling paused — ${reason}. Auto-retrying every 60s.`);
     stopNotified = true;
   }
@@ -290,7 +307,15 @@ function restoreIdling(): void {
     selfInitiatedRelog = false;
     telegram.send('🔄 flush — playtime committed, session refreshed');
   } else {
-    telegram.send(`▶️ Idling resumed — ${idlingGames.length} games`);
+    // Debounce: only announce a resume that actually holds. If the player is
+    // still active, this reconnect is kicked again within seconds and
+    // enterWaitingState cancels this timer (see RESUME_NOTIFY_GRACE_MS), so a
+    // long play session collapses to a single paused/resumed pair.
+    if (resumeNotifyTimer) clearTimeout(resumeNotifyTimer);
+    resumeNotifyTimer = setTimeout(() => {
+      resumeNotifyTimer = null;
+      telegram.send(`▶️ Idling resumed — ${idlingGames.length} games`);
+    }, RESUME_NOTIFY_GRACE_MS);
   }
 
   if (takeoverDriftPending) {
@@ -929,6 +954,10 @@ function handleShutdown(exitCode = 0): void {
     clearTimeout(resumeTimer);
     resumeTimer = null;
   }
+  if (resumeNotifyTimer) {
+    clearTimeout(resumeNotifyTimer);
+    resumeNotifyTimer = null;
+  }
   if (midnightTimer) {
     clearTimeout(midnightTimer);
     midnightTimer = null;
@@ -974,6 +1003,7 @@ function handleCrash(err: unknown): void {
   console.error('\nFatal error:', err);
 
   if (resumeTimer) clearTimeout(resumeTimer);
+  if (resumeNotifyTimer) clearTimeout(resumeNotifyTimer);
   if (midnightTimer) clearTimeout(midnightTimer);
   if (flushTimer) clearTimeout(flushTimer);
   if (zombieTimer) clearTimeout(zombieTimer);
