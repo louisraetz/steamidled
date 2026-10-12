@@ -18,6 +18,7 @@ export interface LoginResult {
   success: boolean;
   accountName?: string;
   error?: string;
+  eresult?: number; // Steam EResult of a failed logon, when one was attached
 }
 
 export type AuthMethod = 'qr' | 'credentials';
@@ -40,4 +41,5 @@ export interface IdlingGame {
 export interface GameSelectorResult {
   selectedGames: GameSelection[];
   exemptAppId: number | null;
+  aborted?: boolean; // true when the user pressed Ctrl+C inside the selector
 }
