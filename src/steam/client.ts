@@ -1,5 +1,17 @@
 import SteamUser from 'steam-user';
+import { LoginSession, EAuthTokenPlatformType } from 'steam-session';
+import { MAX_IDLE_GAMES } from '../constants.js';
 import type { SteamGame } from '../types/index.js';
+
+// How long the app defers to steam-user's own reconnect loop after a non-fatal
+// disconnect. The loop does not always end in loggedOn or error: a refused CM
+// connect makes it give up silently, and CM connect timeouts keep it spinning
+// with _connecting held. After this, the app reclaims the connection itself.
+const RECONNECT_PENDING_MAX_MS = 5 * 60 * 1000;
+// Bound on a single logOn attempt. steam-user can abandon a connect silently
+// (connection refused during auth), which would otherwise leave the promise —
+// and a headless start — pending forever.
+const LOGON_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Wrapper class encapsulating Steam user interactions for game idling
 export class SteamClient {
@@ -7,10 +19,30 @@ export class SteamClient {
   private _isLoggedIn = false;
   private _accountName: string | null = null;
   private _ownershipCached = false;
-  private _ownershipCachePromise: Promise<void> | null = null;
+  private _ownershipCachePromise: Promise<boolean> | null = null;
+  // False when the library was built before license data arrived (10s timeout)
+  private _ownershipCacheComplete = true;
   private _errorHandler: ((err: Error) => void) | null = null;
+  // True while steam-user runs its own reconnect loop after a non-fatal
+  // disconnect (or a relog). Calling logOn in that window throws "Already
+  // attempting to log on" from inside process.nextTick — uncatchable.
+  private _reconnectPending = false;
+  private _reconnectPendingSince = 0;
+  // Set right before a plain logOff we initiate (shutdown, relog fallback), so
+  // the resulting 'disconnected' event is not mistaken for a pending reconnect.
+  private _manualLogOff = false;
+  private _playingBlocked = false;
+  // The token the current session was established with; replaced by Steam's
+  // renewal. Preferred over the on-disk copy, which can fail to persist.
+  private _refreshToken: string | null = null;
+  private _refreshTokenHandler: ((refreshToken: string) => void) | null = null;
 
   constructor() {
+    // Refresh tokens expire after a few months; without renewal a 24/7 daemon
+    // dies with Expired and needs a manual re-login. steam-user's own
+    // renewRefreshTokens option is NOT used: it awaits the renewal inside its
+    // logon handler without a catch, so any non-OK reply from Steam becomes an
+    // unhandled rejection. The renewal is done here, where it can fail safely.
     this.client = new SteamUser({ enablePicsCache: true });
 
     this.client.on('ownershipCached', () => {
@@ -25,15 +57,27 @@ export class SteamClient {
     // inside process.nextTick (uncatchable, crashes the process).
     this.client.on('loggedOn', () => {
       this._isLoggedIn = true;
+      this._reconnectPending = false;
       // Persona resets to Offline on every fresh session — including relog and
       // steam-user's silent autoRelogin, both of which bypass
       // loginWithRefreshToken. Re-assert Online here so a flush relog never
       // leaves the account invisible/offline.
       this.client.setPersona(SteamUser.EPersonaState.Online);
+      void this.renewRefreshToken();
     });
 
-    this.client.on('disconnected', () => {
+    // steam-user emits 'disconnected' (instead of 'error') exactly when it will
+    // reconnect on its own — unless the logOff was ours (then it stays off), or
+    // Steam never answered our ClientLogOff: that 4s fallback in _disconnect
+    // emits (0, 'Logged off') directly and enqueues no reconnect, unlike every
+    // path through _handleLogOff. Both cases leave the reconnect to the app.
+    this.client.on('disconnected', (eresult, msg) => {
       this._isLoggedIn = false;
+      this._playingBlocked = false;
+      const unansweredLogOff = eresult === 0 && msg === 'Logged off';
+      this._reconnectPending = !this._manualLogOff && !unansweredLogOff;
+      this._reconnectPendingSince = Date.now();
+      this._manualLogOff = false;
     });
 
     // A persistent 'error' listener must always exist: steam-user can emit
@@ -43,7 +87,15 @@ export class SteamClient {
     // handler once one is registered via onError.
     this.client.on('error', (err: Error) => {
       this._isLoggedIn = false;
+      this._playingBlocked = false;
+      this._reconnectPending = false;
       this._errorHandler?.(err);
+    });
+
+    // Tracked persistently because Steam reports a blocked session right after
+    // logon, before the app has registered its own playingState handler.
+    this.client.on('playingState', (blocked: boolean) => {
+      this._playingBlocked = blocked;
     });
   }
 
@@ -57,17 +109,92 @@ export class SteamClient {
     return this.client.steamID != null;
   }
 
+  // True while steam-user is reconnecting on its own; logOn must not be called.
+  get isReconnecting(): boolean {
+    if (this.isConnected || !this._reconnectPending) return false;
+    return Date.now() - this._reconnectPendingSince < RECONNECT_PENDING_MAX_MS;
+  }
+
+  // True while steam-user has a logon attempt in flight (its own or ours). This
+  // is the flag logOn() itself checks before throwing, so it is authoritative
+  // where isReconnecting is only a heuristic derived from events.
+  get isConnecting(): boolean {
+    return this.client._connecting === true;
+  }
+
+  // Tears down a logon attempt steam-user is stuck in. With no session held,
+  // logOff() is synchronous and silent: it ends the socket, clears _connecting
+  // and cancels steam-user's retry timers, so the next logOn starts clean.
+  // Deliberately not logout(): that would flag a manual logoff for an event
+  // that never comes.
+  abortPendingConnect(): void {
+    if (this.isConnected) return;
+    this.client.logOff();
+    this._reconnectPending = false;
+  }
+
+  // True while another session on this account is playing, which blocks this
+  // session's gamesPlayed entirely.
+  get isPlayingBlocked(): boolean {
+    return this._playingBlocked;
+  }
+
   get accountName(): string | null {
     return this._accountName;
+  }
+
+  // False if getOwnedGames had to give up waiting for license data, so
+  // family-shared games may be missing from the library.
+  get ownershipCacheComplete(): boolean {
+    return this._ownershipCacheComplete;
+  }
+
+  // The refresh token the live session runs on (renewed in place)
+  get currentRefreshToken(): string | null {
+    return this._refreshToken;
+  }
+
+  // Asks Steam for a renewed refresh token once per logon, the same cadence the
+  // official client and steam-user's renewRefreshTokens use. Steam only issues
+  // one when the current token is close to expiry; the old token is invalid
+  // from then on, so the handler must persist the new one.
+  private async renewRefreshToken(): Promise<void> {
+    if (!this._refreshToken) return;
+    const session = new LoginSession(EAuthTokenPlatformType.SteamClient);
+    session.refreshToken = this._refreshToken;
+    try {
+      const renewed = await session.renewRefreshToken();
+      if (renewed && session.refreshToken) {
+        this._refreshToken = session.refreshToken;
+        // steam-user's own reconnects (auto-relogin, relog()) reuse its saved
+        // logon details; without this every flush relog would present the
+        // now-invalid old token.
+        if (this.client._logOnDetails) this.client._logOnDetails.access_token = session.refreshToken;
+        this._refreshTokenHandler?.(session.refreshToken);
+      }
+    } catch (err) {
+      console.error(`Refresh token renewal failed: ${(err as Error).message}`);
+    }
   }
 
   get steamUser(): SteamUser {
     return this.client;
   }
 
-  // Logs in to Steam using a saved refresh token
+  // Logs in to Steam using a saved refresh token. Rejects (instead of letting
+  // steam-user throw uncatchably inside process.nextTick) when a session or a
+  // logon attempt already exists, and times out an attempt steam-user abandons.
   loginWithRefreshToken(refreshToken: string, accountName?: string): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (this.isConnected) {
+        reject(new Error('Already logged on'));
+        return;
+      }
+      if (this.isConnecting) {
+        reject(new Error('Logon already in progress'));
+        return;
+      }
+
       const onLoggedOn = () => {
         this._isLoggedIn = true;
         if (accountName) {
@@ -78,12 +205,21 @@ export class SteamClient {
         resolve();
       };
 
+      this._refreshToken = refreshToken;
+
       const onError = (err: Error) => {
         cleanup();
         reject(err);
       };
 
+      const timer = setTimeout(() => {
+        cleanup();
+        this.abortPendingConnect();
+        reject(new Error('Logon timed out'));
+      }, LOGON_TIMEOUT_MS);
+
       const cleanup = () => {
+        clearTimeout(timer);
         this.client.removeListener('loggedOn', onLoggedOn);
         this.client.removeListener('error', onError);
       };
@@ -138,20 +274,22 @@ export class SteamClient {
     return games;
   }
 
-  // Resolves once steam-user has populated the PICS ownership cache
-  private waitForOwnershipCache(timeoutMs = 10000): Promise<void> {
-    if (this._ownershipCached) return Promise.resolve();
+  // Resolves once steam-user has populated the PICS ownership cache; false if
+  // the timeout hit first (large libraries), in which case family-shared and
+  // free/paid tagging is incomplete.
+  private waitForOwnershipCache(timeoutMs = 10000): Promise<boolean> {
+    if (this._ownershipCached) return Promise.resolve(true);
     if (this._ownershipCachePromise) return this._ownershipCachePromise;
 
-    this._ownershipCachePromise = new Promise<void>((resolve) => {
+    this._ownershipCachePromise = new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
         this.client.removeListener('ownershipCached', onCached);
-        resolve();
+        resolve(false);
       }, timeoutMs);
 
       const onCached = () => {
         clearTimeout(timer);
-        resolve();
+        resolve(true);
       };
 
       this.client.once('ownershipCached', onCached);
@@ -162,7 +300,13 @@ export class SteamClient {
 
   // Returns appids belonging to family-shared (non-owned) licenses
   private async getSharedAppIds(ownAccountId: number): Promise<Set<number>> {
-    await this.waitForOwnershipCache();
+    const cached = await this.waitForOwnershipCache();
+    this._ownershipCacheComplete = cached;
+    if (!cached) {
+      console.error(
+        'License data did not arrive in time — family-shared games may be missing and free/paid tags may be off. Restart to retry.'
+      );
+    }
 
     const sharedAppIds = new Set<number>();
     const licenses = this.client.licenses;
@@ -228,8 +372,8 @@ export class SteamClient {
       return;
     }
 
-    if (appIds.length > 32) {
-      throw new Error('Cannot idle more than 32 games at once');
+    if (appIds.length > MAX_IDLE_GAMES) {
+      throw new Error(`Cannot idle more than ${MAX_IDLE_GAMES} games at once`);
     }
 
     this.client.gamesPlayed(appIds);
@@ -255,6 +399,7 @@ export class SteamClient {
       // Defensive: if native relog is unavailable (no access_token on the logon
       // details), a clean logOff still commits playtime; the app's
       // disconnect→attemptResume path then re-logs with the stored refresh token.
+      this._manualLogOff = true;
       this.client.logOff();
     }
   }
@@ -280,6 +425,7 @@ export class SteamClient {
 
   // Logs out from Steam and resets state
   logout(): void {
+    this._manualLogOff = true;
     this.client.logOff();
     this._isLoggedIn = false;
     this._accountName = null;
@@ -288,6 +434,12 @@ export class SteamClient {
   // Registers a callback for disconnect events
   onDisconnected(callback: (eresult: number, msg: string) => void): void {
     this.client.on('disconnected', callback);
+  }
+
+  // Registers the callback for a renewed refresh token. The token used to log
+  // on becomes invalid once this fires, so it must be saved.
+  onRefreshToken(callback: (refreshToken: string) => void): void {
+    this._refreshTokenHandler = callback;
   }
 
   // Registers a callback for every successful logon, including steam-user's

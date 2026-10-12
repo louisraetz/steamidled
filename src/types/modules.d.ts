@@ -9,10 +9,22 @@ declare module 'qrcode-terminal' {
 
 declare module 'steam-user' {
   import { EventEmitter } from 'events';
-  import SteamID from 'steamid';
+
+  // Minimal local shape of the `steamid` package's SteamID (not a direct
+  // dependency, so its types do not resolve here; an unresolved import would
+  // silently become `any` under skipLibCheck).
+  interface SteamID {
+    accountid: number;
+    type: number;
+    universe: number;
+    instance: number;
+    getSteamID64(): string;
+    toString(): string;
+  }
 
   interface SteamUserOptions {
     enablePicsCache?: boolean;
+    renewRefreshTokens?: boolean;
   }
 
   interface LogOnDetails {
@@ -31,6 +43,15 @@ declare module 'steam-user' {
 
   interface OwnedAppsResponse {
     apps: OwnedApp[];
+  }
+
+  interface SteamUserEvents {
+    loggedOn: (details: unknown, parental: unknown) => void;
+    disconnected: (eresult: number, msg: string) => void;
+    error: (err: Error & { eresult?: number }) => void;
+    playingState: (blocked: boolean, playingApp: number) => void;
+    refreshToken: (refreshToken: string) => void;
+    ownershipCached: () => void;
   }
 
   interface OwnedAppsOptions {
@@ -76,12 +97,25 @@ declare module 'steam-user' {
     steamID: SteamID | null;
     licenses?: License[];
     picsCache: PicsCache;
+    playingState?: { blocked: boolean; appid: number };
+    // Private steam-user flag (components/09-logon.js): true from logOn() until
+    // a logon response or a cleaned-up connection close. logOn() throws
+    // uncatchably while it is set, and some internal retry loops hold it
+    // without ever emitting an event, so the app has to read it.
+    _connecting?: boolean;
+    // Private steam-user logon details reused by its own reconnects; a renewed
+    // refresh token must be written here or those reconnects use the old one.
+    _logOnDetails?: { access_token?: string };
 
     static EPersonaState: typeof EPersonaState;
     // Bi-directional enum; we use the numeric→name direction for error labels.
     static EResult: Record<number, string>;
 
     constructor(options?: SteamUserOptions);
+
+    on<K extends keyof SteamUserEvents>(event: K, listener: SteamUserEvents[K]): this;
+    once<K extends keyof SteamUserEvents>(event: K, listener: SteamUserEvents[K]): this;
+    removeListener<K extends keyof SteamUserEvents>(event: K, listener: SteamUserEvents[K]): this;
 
     logOn(details: LogOnDetails): void;
     logOff(): void;
