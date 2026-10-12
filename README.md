@@ -30,7 +30,7 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 - **👨‍👧 Family-shared library** — Idle games shared with you, tagged with a `↪` badge
 - **📊 Real-time tracking** — Watch numbers go up. Dopamine achieved.
 - **⭐ Favorites system** — Star your favorites so you can pretend you're organized
-- **⏸️ Auto-pause** — Automatically pauses when you actually play a game (rare occurrence)
+- **⏸️ Auto-pause** — Play something on another device and idling freezes until you stop (Steam blocks the whole session, so the clocks stop too). Picks up again on its own
 - **💾 Persistent sessions** — Remembers your login so you don't have to
 
 ## 📦 Installation
@@ -71,6 +71,18 @@ Get pings when idling stops/resumes and a daily snapshot at local midnight.
 
 Token + chat id live in `~/.steam-idler/telegram.json`. Picking "no" the first time stores `{ "disabled": true }` so the prompt won't bother you again.
 
+What you'll get:
+
+| Message | When |
+|---------|------|
+| ▶️ Idling started | On start, with the game count and the exempt game |
+| ⏸️ Idling paused | A disconnect or takeover that lasts longer than 30s (short blips stay silent) |
+| ▶️ Idling resumed after … | Once the reconnect has held for 90s |
+| 🔄 flush | Every 4h: a quick relog that makes Steam commit the playtime |
+| ⚠️ Zombie session | Steam stopped crediting playtime; the idler forces a reconnect |
+| 📊 Daily idling report | Local midnight: today's gain per game, cooldowns, exempt |
+| 🛑 Idling stopped | Quit, crash, unrecoverable Steam error, or a failed headless start |
+
 ## ⌨️ Controls
 
 ### Game Selection
@@ -83,8 +95,10 @@ Token + chat id live in `~/.steam-idler/telegram.json`. Picking "no" the first t
 | `X` | Mark as exempt from the randomizer ♾️ |
 | `T` | Cycle source filter (all / owned / free / family-shared) |
 | `/` | Search by name (case-insensitive, Esc to clear) |
+| `PgUp` `PgDn` `Home` `End` | Jump through long libraries |
 | `S` | Start all favorites |
-| `Enter` | Let's gooo 🚀 |
+| `Enter` | Let's gooo 🚀 (does nothing while nothing is selected) |
+| `Esc` | In edit mode: back to idling, selection unchanged |
 
 ### While Idling
 
@@ -133,7 +147,8 @@ User=YOUR_USERNAME
 ExecStart=/usr/bin/steamidled --headless
 Restart=on-failure
 RestartSec=10
-# exit 2 = config problem (no favorites, no saved login) — restarting won't fix it
+# exit 2 = nothing a restart can fix: no saved login, no favorites, expired or
+# revoked token, banned account, protocol mismatch. exit 1 = transient, restart.
 RestartPreventExitStatus=2
 
 [Install]
@@ -159,9 +174,31 @@ sudo systemctl stop steamidled     # Take a break
 sudo systemctl restart steamidled  # Turn it off and on again
 ```
 
+## 🐳 Docker
+
+Prefer containers? The repo ships a `Dockerfile` and a `docker-compose.yml`. The image runs as the unprivileged `node` user and keeps everything in a named volume mounted at `/home/node/.steam-idler`.
+
+```bash
+git clone https://github.com/louisraetz/steamidled.git && cd steamidled
+
+# 1. One-off interactive run: log in (QR works in the terminal), star favorites, set up Telegram
+docker compose run --rm -it steamidled login
+
+# 2. Idle in the background
+docker compose up -d
+
+# Later
+docker compose logs -f                                   # What's it thinking?
+docker compose run --rm -it steamidled --setup-telegram  # (Re)configure Telegram
+docker compose run --rm steamidled --logout              # Forget the saved login
+docker compose down                                      # Stop (clean logoff, Telegram ping)
+```
+
+Set `TZ` in `docker-compose.yml` to your timezone, otherwise the daily report arrives at UTC midnight. The restart policy is `on-failure:5` on purpose: Docker has no equivalent of systemd's `RestartPreventExitStatus`, so a config problem (exit 2) gives up after a few tries instead of logging on to Steam every few seconds forever, while transient failures keep restarting.
+
 ## 📁 Where's my stuff?
 
-Everything lives in `~/.steam-idler/`:
+Everything lives in `~/.steam-idler/` (inside Docker: the `steamidled-config` volume):
 
 ```
 ~/.steam-idler/
