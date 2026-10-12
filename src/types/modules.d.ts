@@ -106,6 +106,10 @@ declare module 'steam-user' {
     // Private steam-user logon details reused by its own reconnects; a renewed
     // refresh token must be written here or those reconnects use the old one.
     _logOnDetails?: { access_token?: string };
+    // Private factory for a steam-session LoginSession that talks over the CM
+    // connection. Steam only renews SteamClient refresh tokens over the CM; the
+    // Web API answers AccessDenied.
+    _getLoginSession?(): import('steam-session').LoginSession;
 
     static EPersonaState: typeof EPersonaState;
     // Bi-directional enum; we use the numeric→name direction for error labels.

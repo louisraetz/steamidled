@@ -157,10 +157,13 @@ export class SteamClient {
   // Asks Steam for a renewed refresh token once per logon, the same cadence the
   // official client and steam-user's renewRefreshTokens use. Steam only issues
   // one when the current token is close to expiry; the old token is invalid
-  // from then on, so the handler must persist the new one.
+  // from then on, so the handler must persist the new one. The request must go
+  // over the CM connection (steam-user's own session factory); the Web API
+  // transport that steam-session uses by default answers AccessDenied.
   private async renewRefreshToken(): Promise<void> {
     if (!this._refreshToken) return;
-    const session = new LoginSession(EAuthTokenPlatformType.SteamClient);
+    const session =
+      this.client._getLoginSession?.() ?? new LoginSession(EAuthTokenPlatformType.SteamClient);
     session.refreshToken = this._refreshToken;
     try {
       const renewed = await session.renewRefreshToken();
