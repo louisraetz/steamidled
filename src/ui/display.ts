@@ -2,9 +2,21 @@ import Table from 'cli-table3';
 import chalk from 'chalk';
 import type { IdlingGame } from '../types/index.js';
 
+// Table column widths include 1 char of padding on each side
+const NAME_COL_WIDTH = 38;
+const NAME_MAX_LENGTH = NAME_COL_WIDTH - 2;
+const EXEMPT_SUFFIX = ' ∞';
+
+export interface StatusOptions {
+  waitingReason?: string | null; // set while disconnected and auto-resuming
+  playingBlocked?: boolean; // another session on this account is playing
+  showKeyHints?: boolean; // false in headless mode, which reads no keys
+}
+
 // Displays the welcome banner
-export function showWelcome(): void {
-  console.log(chalk.cyan.bold('\n  Steam Game Time Idler\n'));
+export function showWelcome(version?: string): void {
+  const suffix = version ? chalk.gray(` v${version}`) : '';
+  console.log(chalk.cyan.bold('\n  Steam Game Time Idler') + suffix + '\n');
   console.log(chalk.gray('  Idle your Steam games to collect playtime\n'));
 }
 
@@ -48,11 +60,15 @@ function getTotalPlaytime(game: IdlingGame, isPaused: boolean): string {
   return formatPlaytimeHours(totalMinutes);
 }
 
-// Renders the Game cell: truncated name plus an ∞ marker if exempt
+// Renders the Game cell: truncated name plus an ∞ marker if exempt. The marker
+// counts against the column width, otherwise cli-table3 truncates it away.
 function nameCell(game: IdlingGame, dim = false): string {
-  const truncated = game.name.length > 35 ? game.name.substring(0, 32) + '...' : game.name;
+  const isExempt = game.nextPauseAtMs === null;
+  const maxLength = isExempt ? NAME_MAX_LENGTH - EXEMPT_SUFFIX.length : NAME_MAX_LENGTH;
+  const truncated =
+    game.name.length > maxLength ? game.name.substring(0, maxLength - 3) + '...' : game.name;
   const base = dim ? chalk.gray(truncated) : truncated;
-  return game.nextPauseAtMs === null ? `${base} ${chalk.cyan('∞')}` : base;
+  return isExempt ? `${base} ${chalk.cyan('∞')}` : base;
 }
 
 // Renders the Status cell for cooldown games, with a coarse remaining-time hint
@@ -75,13 +91,26 @@ export function showIdlingStatus(
   idlingGames: IdlingGame[],
   pausedGames: IdlingGame[] = [],
   pausingGames: IdlingGame[] = [],
-  isWaiting = false
+  options: StatusOptions = {}
 ): void {
+  const isWaiting = !!options.waitingReason;
+  const isBlocked = !!options.playingBlocked;
+  // While waiting or blocked no server playtime accrues, so the live delta is
+  // not added for idling rows either.
+  const frozen = isWaiting || isBlocked;
+
   console.clear();
 
   if (isWaiting) {
     console.log(chalk.yellow.bold('\n  Steam Game Time Idler — WAITING TO RESUME\n'));
-    console.log(chalk.yellow('  Player is active on this Steam account elsewhere. Retrying every 60s.\n'));
+    console.log(chalk.yellow(`  ${options.waitingReason}. Auto-retrying with backoff.\n`));
+  } else if (isBlocked) {
+    console.log(chalk.yellow.bold('\n  Steam Game Time Idler — BLOCKED\n'));
+    console.log(
+      chalk.yellow(
+        '  A game is being played on this account elsewhere. Idling resumes when it stops.\n'
+      )
+    );
   } else {
     console.log(chalk.cyan.bold('\n  Steam Game Time Idler - Idling\n'));
   }
@@ -93,19 +122,25 @@ export function showIdlingStatus(
       chalk.cyan('Gained'),
       chalk.cyan('Status'),
     ],
-    colWidths: [38, 10, 12, 14],
+    colWidths: [NAME_COL_WIDTH, 10, 12, 14],
     style: {
       head: [],
       border: ['gray'],
     },
   });
 
+  const idlingStatus = isWaiting
+    ? chalk.yellow('Waiting')
+    : isBlocked
+    ? chalk.yellow('Blocked')
+    : chalk.green('Idling');
+
   for (const game of idlingGames) {
     table.push([
       nameCell(game),
-      getTotalPlaytime(game, false),
-      chalk.green(formatGainedTime(game, false)),
-      chalk.green('Idling'),
+      getTotalPlaytime(game, frozen),
+      chalk.green(formatGainedTime(game, frozen)),
+      idlingStatus,
     ]);
   }
 
@@ -139,6 +174,8 @@ export function showIdlingStatus(
       suffix +
       '\n'
   );
+  // Key hints only make sense on a terminal that actually reads keys
+  if (!process.stdout.isTTY || options.showKeyHints === false) return;
   if (isWaiting) {
     console.log(chalk.gray("  Press 'Q' to quit — edit disabled while waiting\n"));
   } else {

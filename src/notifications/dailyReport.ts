@@ -1,15 +1,19 @@
 import type { IdlingGame } from '../types/index.js';
 
-// Builds the daily Telegram report. Pure formatter — no side effects.
+// Builds the daily Telegram report. Pure formatter — no side effects. `date`
+// only labels the report (the day that ended); all arithmetic uses `nowMs`.
+// isFrozen is true while idling games accrue nothing (waiting to resume, or
+// blocked by another session), so the live delta must not be added.
 export function formatDailyReport(
   idling: IdlingGame[],
   paused: IdlingGame[],
   cooling: IdlingGame[],
   dayStartAccumulatedMs: Map<number, number>,
   date: Date,
-  isWaiting = false
+  isFrozen = false,
+  nowMs = Date.now()
 ): string {
-  const now = date.getTime();
+  const now = nowMs;
   const dateStr = date.toLocaleDateString('en-CA'); // YYYY-MM-DD
   const lines: string[] = [];
   lines.push(`📊 Daily idling report — ${dateStr}`);
@@ -17,16 +21,20 @@ export function formatDailyReport(
   const all = [...idling, ...paused, ...cooling];
   const exempt = all.find((g) => g.nextPauseAtMs === null);
 
+  const todayGain = (game: IdlingGame, accumulated: number): string =>
+    formatHM(accumulated - (dayStartAccumulatedMs.get(game.appid) ?? 0));
+
   if (idling.length > 0) {
     lines.push('');
-    lines.push(`Idling (${idling.length}):`);
+    lines.push(`Idling (${idling.length})${isFrozen ? ' — currently paused' : ''}:`);
     for (const game of idling) {
-      const liveAccumulated = isWaiting
+      const liveAccumulated = isFrozen
         ? game.accumulatedMs
         : game.accumulatedMs + (now - game.startTime.getTime());
-      const todayMs = liveAccumulated - (dayStartAccumulatedMs.get(game.appid) ?? 0);
       const totalMinutes = game.initialPlaytime + Math.floor(liveAccumulated / 60000);
-      lines.push(`• ${game.name} — +${formatHM(todayMs)} today, ${formatTotalH(totalMinutes)} total`);
+      lines.push(
+        `• ${game.name} — +${todayGain(game, liveAccumulated)} today, ${formatTotalH(totalMinutes)} total`
+      );
     }
   }
 
@@ -35,7 +43,9 @@ export function formatDailyReport(
     lines.push(`Cooldown (${cooling.length}):`);
     for (const game of cooling) {
       const remaining = game.pauseUntil ? game.pauseUntil.getTime() - now : 0;
-      lines.push(`• ${game.name} — resumes in ${formatRemaining(remaining)}`);
+      lines.push(
+        `• ${game.name} — +${todayGain(game, game.accumulatedMs)} today, resumes in ${formatRemaining(remaining)}`
+      );
     }
   }
 
