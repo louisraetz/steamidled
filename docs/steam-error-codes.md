@@ -4,6 +4,13 @@ Catalogue of error conditions (`EResult` codes and non-EResult throws) that can
 stop or crash the application, how `steam-user@5.3.0` surfaces each, and what
 `steamidled` currently does in response.
 
+> Historical note: §2 and §3 describe the resume logic as it was when this
+> research was written. The hardening pass (§6) and the later audit changed it:
+> failures are classified by eresult, terminal ones stop immediately, rate limits
+> back off exponentially, non-fatal disconnects defer to steam-user's own
+> reconnect loop, and transient startup failures no longer delete credentials.
+> `src/index.ts` is the source of truth.
+
 Sources of truth: the installed enum
 (`node_modules/steam-user/enums/EResult.js`), the logon component
 (`node_modules/steam-user/components/09-logon.js`), and the app's own handling

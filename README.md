@@ -23,7 +23,8 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 - **🎯 Idle up to 32 games** — Because Steam said that's the limit and who are we to argue
 - **🎲 Smart cooldowns** — Games cycle between random idle and cooldown phases so playtime totals naturally diverge instead of looking suspiciously identical
 - **♾️ Exempt one game** — Pick a favorite that ignores cooldowns and idles forever
-- **🩹 Auto-recovery** — Survives connection drops, Steam outages, and session takeovers. Pings Telegram once and reconnects on its own (up to 30 retries for network errors, 15 for auth)
+- **🩹 Auto-recovery** — Survives connection drops, Steam outages, and session takeovers. Pings Telegram once and reconnects on its own with exponential backoff. Gives up only on unrecoverable errors (expired token, ban, protocol mismatch) or after 30 failed reconnects
+- **🔑 Token renewal** — Refresh tokens expire after a few months; the daemon renews and saves them on its own so it keeps running
 - **📲 Telegram notifications** — Optional bot pings on stop/resume + daily midnight stats
 - **🔍 Search & filter** — Type `/` to search by name, `T` to cycle owned / free / family-shared
 - **👨‍👧 Family-shared library** — Idle games shared with you, tagged with a `↪` badge
@@ -46,6 +47,8 @@ npm install -g @louisraetz/steamidled
 steamidled                  # Interactive mode
 steamidled --headless       # Headless mode (auto-start favorites)
 steamidled --setup-telegram # (Re)configure Telegram notifications
+steamidled --logout         # Forget the saved Steam login
+steamidled --help           # All options
 ```
 
 ### Interactive mode
@@ -56,7 +59,7 @@ steamidled --setup-telegram # (Re)configure Telegram notifications
 
 ### Headless mode
 
-Automatically logs in and starts idling your favorited games. Perfect for running as a service. Requires running interactively first to log in and set up favorites.
+Automatically logs in and starts idling your favorited games (the first 32 if you starred more). Perfect for running as a service. Requires running interactively first to log in and set up favorites. A network blip or rate limit at startup keeps your saved login; only a genuinely expired or revoked token makes you log in again.
 
 ### 📲 Telegram notifications (optional)
 
@@ -130,6 +133,8 @@ User=YOUR_USERNAME
 ExecStart=/usr/bin/steamidled --headless
 Restart=on-failure
 RestartSec=10
+# exit 2 = config problem (no favorites, no saved login) — restarting won't fix it
+RestartPreventExitStatus=2
 
 [Install]
 WantedBy=multi-user.target
