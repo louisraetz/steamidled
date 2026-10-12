@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.github
+.claude
+.idea
+assets
+docs
+*.md
+!README.md
+docker-compose.yml

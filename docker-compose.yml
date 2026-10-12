@@ -1,0 +1,19 @@
+services:
+  steamidled:
+    build: .
+    image: steamidled
+    container_name: steamidled
+    init: true
+    # on-failure with a cap: a config problem (exit 2) stops after a few tries
+    # instead of logging on to Steam every few seconds forever. Transient
+    # failures (exit 1) keep restarting because the counter resets once the
+    # daemon has been up for 10s.
+    restart: on-failure:5
+    environment:
+      # Local midnight for the daily Telegram report
+      TZ: Europe/Berlin
+    volumes:
+      - steamidled-config:/home/node/.steam-idler
+
+volumes:
+  steamidled-config:
