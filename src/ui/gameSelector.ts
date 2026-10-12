@@ -2,6 +2,7 @@ import * as readline from 'node:readline';
 import chalk from 'chalk';
 import type { SteamGame, GameSelection, GameSource, GameSelectorResult } from '../types/index.js';
 import { loadFavorites, saveFavorites, loadExempt, saveExempt } from '../storage/favorites.js';
+import { MAX_IDLE_GAMES } from '../constants.js';
 
 interface SelectableGame {
   appid: number;
@@ -39,13 +40,16 @@ export async function selectGames(
   const favorites = loadFavorites(accountName);
   const initialExempt = loadExempt(accountName);
   const currentAppIds = new Set(currentSelection.map((g) => g.appid));
+  // Edit mode (a current selection exists) must reflect exactly what is idling;
+  // re-adding favorites would silently undo a deliberate deselection.
+  const isEditMode = currentSelection.length > 0;
 
   // Create selectable games list
   const selectableGames: SelectableGame[] = games.map((game) => ({
     appid: game.appid,
     name: game.name,
     playtime: game.playtime_forever,
-    selected: currentAppIds.has(game.appid) || favorites.includes(game.appid),
+    selected: isEditMode ? currentAppIds.has(game.appid) : favorites.includes(game.appid),
     isFavorite: favorites.includes(game.appid),
     isExempt: initialExempt === game.appid,
     source: game.source,
@@ -58,6 +62,16 @@ export async function selectGames(
     return a.name.localeCompare(b.name);
   });
 
+  // The preselection (current selection ∪ favorites) can exceed the cap when a
+  // favorites file was hand-edited or predates the limit; keep the first 32 so
+  // Enter never trips the gamesPlayed cap.
+  let preselected = 0;
+  for (const game of selectableGames) {
+    if (!game.selected) continue;
+    if (preselected >= MAX_IDLE_GAMES) game.selected = false;
+    else preselected++;
+  }
+
   return new Promise((resolve) => {
     let cursorIndex = 0;
     let scrollOffset = 0;
@@ -65,7 +79,11 @@ export async function selectGames(
     let searchQuery = '';
     let isSearchMode = false;
     let currentExempt: number | null = initialExempt;
-    const pageSize = 15;
+    let hint = ''; // one-shot feedback line, cleared on the next key
+    // Title, counters, section headers, scroll line, hint and key help take up
+    // to ~20 rows; size the list so a default 24-row terminal keeps the
+    // counters on screen.
+    const pageSize = Math.min(30, Math.max(5, (process.stdout.rows || 24) - 20));
 
     const matchesQuery = (g: SelectableGame): boolean =>
       searchQuery.length === 0 ||
@@ -105,7 +123,7 @@ export async function selectGames(
         : 'none';
       console.log(
         chalk.gray(
-          `  Selected: ${selectedCount}/32 | Favorites: ${favoriteCount} | ` +
+          `  Selected: ${selectedCount}/${MAX_IDLE_GAMES} | Favorites: ${favoriteCount} | ` +
             `Owned: ${counts.owned} ${chalk.green('$')} ${counts.free} ${chalk.magenta('↪')} ${counts.shared}`
         )
       );
@@ -116,6 +134,7 @@ export async function selectGames(
       } else if (searchQuery.length > 0) {
         console.log(chalk.gray(`  Search: ${chalk.cyan(searchQuery)} (/ to edit, Esc to clear)`));
       }
+      if (hint) console.log(chalk.yellow(`  ${hint}`));
       console.log('');
 
       const visibleStart = scrollOffset;
@@ -171,18 +190,28 @@ export async function selectGames(
       if (isSearchMode) {
         console.log(chalk.gray('  Type to filter | Backspace: delete | Esc: cancel | Enter: confirm'));
       } else {
-        console.log(chalk.gray('  ↑/↓: Navigate | Space: Toggle | F: Favorite | X: Exempt | T: Filter | /: Search'));
-        console.log(chalk.gray('  Enter: Start | S: Start all favorites'));
+        console.log(chalk.gray('  ↑/↓ PgUp/PgDn Home/End: Navigate | Space: Toggle | F: Favorite | X: Exempt | T: Filter | /: Search'));
+        console.log(
+          chalk.gray(
+            isEditMode
+              ? '  Enter: Apply | S: Idle all favorites | Esc: Back (keep selection; F/X already saved)'
+              : '  Enter: Start | S: Start all favorites'
+          )
+        );
       }
       console.log('');
     };
 
     const handleKey = (str: string | undefined, key: readline.Key) => {
       const allGames = getVisibleGames();
+      hint = '';
 
+      // Hand the abort back to the caller so it can log off cleanly instead of
+      // exiting mid-session.
       if (key.ctrl && key.name === 'c') {
         cleanup();
-        process.exit(0);
+        resolve({ selectedGames: [], exemptAppId: currentExempt, aborted: true });
+        return;
       }
 
       if (key.name === 'up') {
@@ -203,6 +232,18 @@ export async function selectGames(
             scrollOffset = cursorIndex - pageSize + 1;
           }
         }
+        render();
+        return;
+      }
+
+      if (key.name === 'pageup' || key.name === 'pagedown' || key.name === 'home' || key.name === 'end') {
+        const last = Math.max(0, allGames.length - 1);
+        if (key.name === 'home') cursorIndex = 0;
+        else if (key.name === 'end') cursorIndex = last;
+        else if (key.name === 'pageup') cursorIndex = Math.max(0, cursorIndex - pageSize);
+        else cursorIndex = Math.min(last, cursorIndex + pageSize);
+        if (cursorIndex < scrollOffset) scrollOffset = cursorIndex;
+        else if (cursorIndex >= scrollOffset + pageSize) scrollOffset = cursorIndex - pageSize + 1;
         render();
         return;
       }
@@ -252,6 +293,12 @@ export async function selectGames(
           cursorIndex = 0;
           scrollOffset = 0;
           render();
+          return;
+        }
+        // Edit mode: leave the selection exactly as it is idling now
+        if (isEditMode) {
+          cleanup();
+          resolve({ selectedGames: currentSelection, exemptAppId: currentExempt });
         }
         return;
       }
@@ -260,7 +307,9 @@ export async function selectGames(
         const game = allGames[cursorIndex];
         if (game) {
           const selectedCount = selectableGames.filter((g) => g.selected).length;
-          if (!game.selected && selectedCount >= 32) {
+          if (!game.selected && selectedCount >= MAX_IDLE_GAMES) {
+            hint = `Steam allows at most ${MAX_IDLE_GAMES} games at once`;
+            render();
             return;
           }
           game.selected = !game.selected;
@@ -272,13 +321,21 @@ export async function selectGames(
       if (str === 'f' || str === 'F') {
         const game = allGames[cursorIndex];
         if (game) {
+          const favoriteTotal = selectableGames.filter((g) => g.isFavorite).length;
+          if (!game.isFavorite && favoriteTotal >= MAX_IDLE_GAMES) {
+            hint = `Favorites are capped at ${MAX_IDLE_GAMES} (headless idles all of them)`;
+            render();
+            return;
+          }
           game.isFavorite = !game.isFavorite;
 
           // Update favorites in storage
           const newFavorites = selectableGames
             .filter((g) => g.isFavorite)
             .map((g) => g.appid);
-          saveFavorites(accountName, newFavorites);
+          if (!saveFavorites(accountName, newFavorites)) {
+            hint = 'Could not save favorites — is ~/.steam-idler writable?';
+          }
 
           selectableGames.sort((a, b) => {
             if (a.isFavorite && !b.isFavorite) return -1;
@@ -330,26 +387,39 @@ export async function selectGames(
             game.isExempt = true;
             currentExempt = game.appid;
           }
-          saveExempt(accountName, currentExempt);
+          if (!saveExempt(accountName, currentExempt)) {
+            hint = 'Could not save exempt game — is ~/.steam-idler writable?';
+          }
         }
         render();
         return;
       }
 
       if (str === 's' || str === 'S') {
-        cleanup();
         const selectedGames = selectableGames
           .filter((g) => g.isFavorite)
+          .slice(0, MAX_IDLE_GAMES)
           .map((g) => ({ appid: g.appid, name: g.name }));
+        if (selectedGames.length === 0) {
+          hint = 'No favorites yet — press F on a game first';
+          render();
+          return;
+        }
+        cleanup();
         resolve({ selectedGames, exemptAppId: currentExempt });
         return;
       }
 
       if (key.name === 'return') {
-        cleanup();
         const selectedGames = selectableGames
           .filter((g) => g.selected)
           .map((g) => ({ appid: g.appid, name: g.name }));
+        if (selectedGames.length === 0) {
+          hint = 'Nothing selected — Space toggles a game, S starts your favorites';
+          render();
+          return;
+        }
+        cleanup();
         resolve({ selectedGames, exemptAppId: currentExempt });
         return;
       }
