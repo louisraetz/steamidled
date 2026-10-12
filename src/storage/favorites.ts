@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { writeFileAtomic } from './atomicWrite.js';
 
 const CONFIG_DIR = join(homedir(), '.steam-idler');
 
@@ -38,16 +39,25 @@ function readData(accountName: string): FavoritesData {
   }
 }
 
-function writeData(accountName: string, data: FavoritesData): void {
-  ensureConfigDir();
-  writeFileSync(getFavoritesPath(accountName), JSON.stringify(data, null, 2), 'utf-8');
+// Writes the favorites file. A read-only config dir returns false instead of
+// throwing, so a keypress in the selector can never take the idler down.
+function writeData(accountName: string, data: FavoritesData): boolean {
+  const filePath = getFavoritesPath(accountName);
+  try {
+    ensureConfigDir();
+    writeFileAtomic(filePath, JSON.stringify(data, null, 2));
+    return true;
+  } catch (err) {
+    console.error(`Could not save ${filePath}: ${(err as Error).message}`);
+    return false;
+  }
 }
 
-// Saves the list of favorite game IDs to a JSON file
-export function saveFavorites(accountName: string, favorites: number[]): void {
+// Saves the list of favorite game IDs to a JSON file; false if it could not be written
+export function saveFavorites(accountName: string, favorites: number[]): boolean {
   const data = readData(accountName);
   data.favorites = favorites;
-  writeData(accountName, data);
+  return writeData(accountName, data);
 }
 
 // Loads favorite game IDs from the JSON file, returning empty array if not found
@@ -60,9 +70,9 @@ export function loadExempt(accountName: string): number | null {
   return readData(accountName).exemptAppId ?? null;
 }
 
-// Saves the exempt appid (or null to clear)
-export function saveExempt(accountName: string, exemptAppId: number | null): void {
+// Saves the exempt appid (or null to clear); false if it could not be written
+export function saveExempt(accountName: string, exemptAppId: number | null): boolean {
   const data = readData(accountName);
   data.exemptAppId = exemptAppId;
-  writeData(accountName, data);
+  return writeData(accountName, data);
 }
