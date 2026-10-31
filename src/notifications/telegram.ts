@@ -1,9 +1,8 @@
 import { existsSync, readFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { input, password as passwordPrompt } from '@inquirer/prompts';
-import chalk from 'chalk';
 import { writeFileAtomic } from '../storage/atomicWrite.js';
+import { log } from '../logging/logger.js';
 
 const CONFIG_DIR = join(homedir(), '.steam-idler');
 const CONFIG_PATH = join(CONFIG_DIR, 'telegram.json');
@@ -11,6 +10,7 @@ const CONFIG_PATH = join(CONFIG_DIR, 'telegram.json');
 export interface TelegramConfig {
   token?: string;
   chatId?: string;
+  chatLabel?: string;
   disabled?: boolean;
 }
 
@@ -18,7 +18,7 @@ function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
 }
 
-function loadTelegramConfig(): TelegramConfig | null {
+export function loadTelegramConfig(): TelegramConfig | null {
   if (!existsSync(CONFIG_PATH)) return null;
   try {
     chmodSync(CONFIG_PATH, 0o600);
@@ -31,19 +31,23 @@ function loadTelegramConfig(): TelegramConfig | null {
   }
 }
 
-// Writes the config file; a read-only config dir is reported, not fatal
-function writeTelegramConfig(config: TelegramConfig): void {
+export function writeTelegramConfig(config: TelegramConfig): boolean {
   try {
     ensureConfigDir();
     writeFileAtomic(CONFIG_PATH, JSON.stringify(config, null, 2), 0o600);
+    return true;
   } catch (err) {
-    console.error(`Could not save ${CONFIG_PATH}: ${(err as Error).message}`);
+    log.error('storage', `Could not save ${CONFIG_PATH}`, {
+      cause: err,
+      hint: 'Check that ~/.steam-idler is writable.',
+      interactive: () => console.error(`Could not save ${CONFIG_PATH}: ${(err as Error).message}`),
+    });
+    return false;
   }
 }
 
-// Marks Telegram as explicitly skipped so we don't re-prompt on next interactive run
-export function saveTelegramDisabled(): void {
-  writeTelegramConfig({ disabled: true });
+export function saveTelegramDisabled(): boolean {
+  return writeTelegramConfig({ disabled: true });
 }
 
 export class TelegramNotifier {
@@ -76,93 +80,19 @@ export class TelegramNotifier {
     })
       .then((res) => {
         if (!res.ok) {
-          console.error(`[telegram] send rejected: HTTP ${res.status} — check bot token and chat id`);
+          log.warn('telegram', `Send rejected: HTTP ${res.status}`, {
+            hint: 'Check the bot token and chat id in Settings or with --setup-telegram.',
+            interactive: () =>
+              console.error(`[telegram] send rejected: HTTP ${res.status} — check bot token and chat id`),
+          });
         }
       })
       .catch((err) => {
-        console.error(`[telegram] send failed: ${(err as Error).message}`);
+        log.warn('telegram', 'Send failed', {
+          cause: err,
+          hint: "Check the server's internet connection.",
+          interactive: () => console.error(`[telegram] send failed: ${(err as Error).message}`),
+        });
       });
   }
-}
-
-interface GetMeResponse {
-  ok: boolean;
-  result?: { username?: string };
-  description?: string;
-}
-
-interface GetUpdatesResponse {
-  ok: boolean;
-  result?: Array<{ message?: { text?: string; chat?: { id: number } } }>;
-  description?: string;
-}
-
-const SETUP_FETCH_TIMEOUT_MS = 10_000;
-const CHAT_ID_ATTEMPTS = 3;
-
-// Polls getUpdates for the chat that sent /start. Prefers the newest /start so
-// a stray message from another chat does not pick a stranger's chat id.
-async function fetchChatId(token: string): Promise<number | null> {
-  const updatesRes = await fetch(`https://api.telegram.org/bot${token}/getUpdates?limit=50`, {
-    signal: AbortSignal.timeout(SETUP_FETCH_TIMEOUT_MS),
-  });
-  if (!updatesRes.ok) {
-    throw new Error(`Telegram getUpdates failed: HTTP ${updatesRes.status}`);
-  }
-  const updates = (await updatesRes.json()) as GetUpdatesResponse;
-  if (!updates.ok) {
-    throw new Error(`getUpdates failed: ${updates.description ?? 'unknown'}`);
-  }
-  const messages = (updates.result ?? []).map((u) => u.message).filter((m) => m?.chat?.id);
-  const started = messages.filter((m) => m?.text?.trim().startsWith('/start'));
-  const pick = started[started.length - 1] ?? messages[messages.length - 1];
-  return pick?.chat?.id ?? null;
-}
-
-export async function runTelegramSetup(): Promise<void> {
-  console.log(chalk.cyan.bold('\n  Setup Telegram notifications\n'));
-  console.log(chalk.gray('  1. Create a bot via @BotFather and copy its token.'));
-  console.log(chalk.gray('  2. Paste the token below.'));
-  console.log(chalk.gray('  3. Send /start to your bot in Telegram when prompted.\n'));
-
-  const token = await passwordPrompt({ message: 'Bot token:', mask: '*' });
-
-  const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
-    signal: AbortSignal.timeout(SETUP_FETCH_TIMEOUT_MS),
-  });
-  if (!meRes.ok) {
-    throw new Error(`Telegram getMe failed: HTTP ${meRes.status}`);
-  }
-  const me = (await meRes.json()) as GetMeResponse;
-  if (!me.ok) {
-    throw new Error(`Token rejected by Telegram: ${me.description ?? 'unknown error'}`);
-  }
-  const username = me.result?.username ?? 'your_bot';
-
-  console.log(chalk.green(`\n  ✓ Bot @${username} reachable`));
-  console.log(chalk.cyan(`  Send /start to @${username} in Telegram, then press Enter.\n`));
-
-  // Telegram needs a moment to register the message; retry instead of making
-  // the user rerun --setup-telegram after one early Enter.
-  let chatId: number | null = null;
-  for (let attempt = 1; attempt <= CHAT_ID_ATTEMPTS && !chatId; attempt++) {
-    await input({
-      message: attempt === 1 ? 'Press Enter when done' : 'No /start seen yet — send it, then press Enter',
-    });
-    chatId = await fetchChatId(token);
-  }
-  if (!chatId) {
-    throw new Error('No /start message received — run --setup-telegram again after sending /start');
-  }
-
-  writeTelegramConfig({ token, chatId: String(chatId) });
-
-  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text: '✅ steamidled notifications enabled.' }),
-    signal: AbortSignal.timeout(SETUP_FETCH_TIMEOUT_MS),
-  });
-
-  console.log(chalk.green('\n  ✓ Saved to ~/.steam-idler/telegram.json\n'));
 }

@@ -71,10 +71,7 @@ export async function selectGames(
     let searchQuery = '';
     let isSearchMode = false;
     let currentExempt: number | null = initialExempt;
-    let hint = ''; // one-shot feedback line, cleared on the next key
-    // Title, counters, section headers, scroll line, hint and key help take up
-    // to ~20 rows; size the list so a default 24-row terminal keeps the
-    // counters on screen.
+    let hint = '';
     const pageSize = Math.min(30, Math.max(5, (process.stdout.rows || 24) - 20));
 
     const matchesQuery = (g: SelectableGame): boolean =>

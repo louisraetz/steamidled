@@ -1,6 +1,7 @@
 import SteamUser from 'steam-user';
 import { LoginSession, EAuthTokenPlatformType } from 'steam-session';
 import { MAX_IDLE_GAMES } from '../constants.js';
+import { log } from '../logging/logger.js';
 import type { SteamGame } from '../types/index.js';
 
 const RECONNECT_PENDING_MAX_MS = 5 * 60 * 1000;
@@ -20,6 +21,7 @@ export class SteamClient {
   private _playingBlocked = false;
   private _refreshToken: string | null = null;
   private _refreshTokenHandler: ((refreshToken: string) => void) | null = null;
+  private _pendingLogonReject: ((err: Error) => void) | null = null;
 
   constructor() {
     this.client = new SteamUser({ enablePicsCache: true });
@@ -77,6 +79,7 @@ export class SteamClient {
     if (this.isConnected) return;
     this.client.logOff();
     this._reconnectPending = false;
+    this._pendingLogonReject?.(new Error('Logon cancelled'));
   }
 
   get isPlayingBlocked(): boolean {
@@ -96,19 +99,25 @@ export class SteamClient {
   }
 
   private async renewRefreshToken(): Promise<void> {
-    if (!this._refreshToken) return;
+    const currentToken = this._refreshToken;
+    if (!currentToken) return;
     const session =
       this.client._getLoginSession?.() ?? new LoginSession(EAuthTokenPlatformType.SteamClient);
-    session.refreshToken = this._refreshToken;
+    session.refreshToken = currentToken;
     try {
       const renewed = await session.renewRefreshToken();
+      if (this._refreshToken !== currentToken) return;
       if (renewed && session.refreshToken) {
         this._refreshToken = session.refreshToken;
         if (this.client._logOnDetails) this.client._logOnDetails.access_token = session.refreshToken;
         this._refreshTokenHandler?.(session.refreshToken);
       }
     } catch (err) {
-      console.error(`Refresh token renewal failed: ${(err as Error).message}`);
+      log.warn('steam', 'Refresh token renewal failed', {
+        cause: err,
+        hint: 'Nothing to do now. steamidled tries again at the next sign-in.',
+        interactive: () => console.error(`Refresh token renewal failed: ${(err as Error).message}`),
+      });
     }
   }
 
@@ -153,6 +162,12 @@ export class SteamClient {
         clearTimeout(timer);
         this.client.removeListener('loggedOn', onLoggedOn);
         this.client.removeListener('error', onError);
+        this._pendingLogonReject = null;
+      };
+
+      this._pendingLogonReject = (err: Error) => {
+        cleanup();
+        reject(err);
       };
 
       this.client.on('loggedOn', onLoggedOn);
@@ -229,9 +244,13 @@ export class SteamClient {
     const cached = await this.waitForOwnershipCache();
     this._ownershipCacheComplete = cached;
     if (!cached) {
-      console.error(
-        'License data did not arrive in time — family-shared games may be missing and free/paid tags may be off. Restart to retry.'
-      );
+      log.warn('steam', 'License data did not arrive in time', {
+        hint: 'Family-shared games may be missing and free/paid tags may be off. Restart to retry.',
+        interactive: () =>
+          console.error(
+            'License data did not arrive in time — family-shared games may be missing and free/paid tags may be off. Restart to retry.'
+          ),
+      });
     }
 
     const sharedAppIds = new Set<number>();
@@ -330,10 +349,13 @@ export class SteamClient {
   }
 
   logout(): void {
-    this._manualLogOff = true;
+    if (this.isConnected) this._manualLogOff = true;
     this.client.logOff();
     this._isLoggedIn = false;
     this._accountName = null;
+    this._refreshToken = null;
+    this._ownershipCached = false;
+    this._ownershipCachePromise = null;
   }
 
   onDisconnected(callback: (eresult: number, msg: string) => void): void {

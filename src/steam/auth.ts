@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { LoginSession, EAuthTokenPlatformType, EAuthSessionGuardType } from 'steam-session';
 import qrcode from 'qrcode-terminal';
 import { input, password as passwordPrompt } from '@inquirer/prompts';
@@ -10,25 +11,48 @@ import {
   clearCredentials,
   hasStoredCredentials,
 } from '../storage/credentials.js';
-import type { LoginResult } from '../types/index.js';
+import { INVALID_TOKEN_ERESULTS } from '../constants.js';
+import type { LoginResult, StoredCredentials } from '../types/index.js';
 
-// EResults that mean the stored refresh token itself is bad. Only these justify
-// deleting credentials.json — a network blip, Steam outage or rate limit at
-// startup must not brick a headless daemon into "run interactively first".
-const INVALID_TOKEN_ERESULTS = new Set<number>([
-  5, 15, 26, 27, 126, // InvalidPassword, AccessDenied, Revoked, Expired, CachedCredentialInvalid
-]);
-// steam-session gives up polling after 30s by default — too short to find the
-// phone, open the app and approve.
-const LOGIN_TIMEOUT_MS = 120_000;
-const GUARD_CODE_ATTEMPTS = 3;
+export const LOGIN_TIMEOUT_MS = 120_000;
+export const GUARD_CODE_ATTEMPTS = 3;
+const CLIENT_IDLE_WAIT_MS = 10_000;
+const CLIENT_IDLE_POLL_MS = 250;
 
 interface GuardAction {
   type: number;
   detail?: string;
 }
 
-// Authenticates via QR code scanned with the Steam mobile app
+async function waitForIdleClient(client: SteamClient): Promise<boolean> {
+  const deadline = Date.now() + CLIENT_IDLE_WAIT_MS;
+  while (client.isConnected || client.isReconnecting || client.isConnecting) {
+    if (Date.now() >= deadline) return false;
+    await delay(CLIENT_IDLE_POLL_MS);
+  }
+  return true;
+}
+
+export async function completeLogin(
+  client: SteamClient,
+  credentials: StoredCredentials
+): Promise<LoginResult> {
+  if (!(await waitForIdleClient(client))) {
+    return {
+      success: false,
+      error: 'Steam is still busy with the previous session. Try again in a moment.',
+    };
+  }
+  saveCredentials(credentials);
+  try {
+    await client.loginWithRefreshToken(credentials.refreshToken, credentials.accountName);
+    return { success: true, accountName: credentials.accountName };
+  } catch (err) {
+    const e = err as Error & { eresult?: number };
+    return { success: false, error: e.message, eresult: e.eresult };
+  }
+}
+
 export async function loginWithQR(client: SteamClient): Promise<LoginResult> {
   const session = new LoginSession(EAuthTokenPlatformType.SteamClient);
   session.loginTimeout = LOGIN_TIMEOUT_MS;
@@ -43,17 +67,7 @@ export async function loginWithQR(client: SteamClient): Promise<LoginResult> {
         return;
       }
 
-      saveCredentials({
-        accountName,
-        refreshToken,
-      });
-
-      try {
-        await client.loginWithRefreshToken(refreshToken, accountName);
-        resolve({ success: true, accountName });
-      } catch (err) {
-        resolve({ success: false, error: (err as Error).message });
-      }
+      resolve(await completeLogin(client, { accountName, refreshToken }));
     });
 
     session.on('remoteInteraction', () => {
@@ -152,17 +166,7 @@ export async function loginWithCredentials(client: SteamClient): Promise<LoginRe
         return;
       }
 
-      saveCredentials({
-        accountName,
-        refreshToken,
-      });
-
-      try {
-        await client.loginWithRefreshToken(refreshToken, accountName);
-        finish({ success: true, accountName });
-      } catch (err) {
-        finish({ success: false, error: (err as Error).message });
-      }
+      finish(await completeLogin(client, { accountName, refreshToken }));
     });
 
     session.on('timeout', () => {

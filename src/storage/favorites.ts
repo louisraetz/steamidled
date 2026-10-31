@@ -2,6 +2,7 @@ import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileAtomic } from './atomicWrite.js';
+import { log } from '../logging/logger.js';
 
 const CONFIG_DIR = join(homedir(), '.steam-idler');
 
@@ -43,7 +44,11 @@ function writeData(accountName: string, data: FavoritesData): boolean {
     writeFileAtomic(filePath, JSON.stringify(data, null, 2));
     return true;
   } catch (err) {
-    console.error(`Could not save ${filePath}: ${(err as Error).message}`);
+    log.error('storage', `Could not save ${filePath}`, {
+      cause: err,
+      hint: 'Check that ~/.steam-idler is writable.',
+      interactive: () => console.error(`Could not save ${filePath}: ${(err as Error).message}`),
+    });
     return false;
   }
 }

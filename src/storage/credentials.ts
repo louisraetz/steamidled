@@ -2,6 +2,7 @@ import { readFileSync, existsSync, mkdirSync, unlinkSync, chmodSync } from 'node
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileAtomic } from './atomicWrite.js';
+import { log } from '../logging/logger.js';
 import type { StoredCredentials } from '../types/index.js';
 
 const CONFIG_DIR = join(homedir(), '.steam-idler');
@@ -19,7 +20,12 @@ export function saveCredentials(credentials: StoredCredentials): boolean {
     writeFileAtomic(CREDENTIALS_FILE, JSON.stringify(credentials, null, 2), 0o600);
     return true;
   } catch (err) {
-    console.error(`Could not save credentials to ${CREDENTIALS_FILE}: ${(err as Error).message}`);
+    log.error('storage', `Could not save credentials to ${CREDENTIALS_FILE}`, {
+      cause: err,
+      hint: 'Check that ~/.steam-idler is writable.',
+      interactive: () =>
+        console.error(`Could not save credentials to ${CREDENTIALS_FILE}: ${(err as Error).message}`),
+    });
     return false;
   }
 }
@@ -69,7 +75,11 @@ export function loadCredentials(): StoredCredentials | null {
   try {
     raw = readFileSync(CREDENTIALS_FILE, 'utf-8');
   } catch (err) {
-    console.error(`Could not read ${CREDENTIALS_FILE}: ${(err as Error).message}`);
+    log.error('storage', `Could not read ${CREDENTIALS_FILE}`, {
+      cause: err,
+      hint: 'Check the permissions of ~/.steam-idler.',
+      interactive: () => console.error(`Could not read ${CREDENTIALS_FILE}: ${(err as Error).message}`),
+    });
     return null;
   }
 
@@ -80,7 +90,11 @@ export function loadCredentials(): StoredCredentials | null {
     parsed = null;
   }
   if (!isValidCredentials(parsed)) {
-    console.error(`Ignoring unreadable credentials file ${CREDENTIALS_FILE} — log in again.`);
+    log.warn('storage', `Ignoring unreadable credentials file ${CREDENTIALS_FILE}`, {
+      hint: 'Log in again.',
+      interactive: () =>
+        console.error(`Ignoring unreadable credentials file ${CREDENTIALS_FILE} — log in again.`),
+    });
     clearCredentials();
     return null;
   }
@@ -93,7 +107,11 @@ export function clearCredentials(): void {
       unlinkSync(CREDENTIALS_FILE);
     }
   } catch (err) {
-    console.error(`Could not remove ${CREDENTIALS_FILE}: ${(err as Error).message}`);
+    log.error('storage', `Could not remove ${CREDENTIALS_FILE}`, {
+      cause: err,
+      hint: 'Delete the file by hand or check the permissions of ~/.steam-idler.',
+      interactive: () => console.error(`Could not remove ${CREDENTIALS_FILE}: ${(err as Error).message}`),
+    });
   }
 }
 

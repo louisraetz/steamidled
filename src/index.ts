@@ -23,15 +23,37 @@ import {
   showGoodbye,
   showError,
 } from './ui/display.js';
-import { loadFavorites, loadExempt } from './storage/favorites.js';
+import { loadFavorites, loadExempt, saveFavorites, saveExempt } from './storage/favorites.js';
 import { loadCredentials, saveCredentials } from './storage/credentials.js';
-import { TelegramNotifier, runTelegramSetup, saveTelegramDisabled } from './notifications/telegram.js';
+import { TelegramNotifier, saveTelegramDisabled } from './notifications/telegram.js';
+import { runTelegramSetup } from './notifications/telegramSetup.js';
 import { formatDailyReport } from './notifications/dailyReport.js';
-import { MAX_IDLE_GAMES, IS_HEADLESS } from './constants.js';
+import {
+  MAX_IDLE_GAMES,
+  IS_HEADLESS,
+  IS_WEB,
+  TAKEOVER_ERESULTS,
+  TERMINAL_ERESULTS,
+  RATE_LIMIT_ERESULTS,
+  INVALID_TOKEN_ERESULTS,
+  WEB_DEFAULT_PORT,
+} from './constants.js';
 import { createSpinner } from './ui/spinner.js';
+import { log } from './logging/logger.js';
+import { countLabel, formatDuration, formatWait } from './utils/format.js';
 import type { SteamGame, GameSelection, IdlingGame, LoginResult } from './types/index.js';
+import type { Engine, EngineState, ResumeInfo, ResumeKind, SessionStart, WebBridge } from './web/engine.js';
 
-const KNOWN_FLAGS = ['--headless', '--setup-telegram', '--logout', '--help', '-h', '--version', '-v'];
+const KNOWN_FLAGS = [
+  '--headless',
+  '--web',
+  '--setup-telegram',
+  '--logout',
+  '--help',
+  '-h',
+  '--version',
+  '-v',
+];
 const args = process.argv.slice(2);
 const isHeadless = IS_HEADLESS;
 const isSetupTelegram = args.includes('--setup-telegram');
@@ -41,26 +63,12 @@ const isVersion = args.includes('--version') || args.includes('-v');
 const unknownFlags = args.filter((a) => !KNOWN_FLAGS.includes(a));
 
 const HOURS_MS = 60 * 60 * 1000;
-const TAKEOVER_ERESULTS = new Set<number>([6, 34]); // LoggedInElsewhere, LogonSessionReplaced
 const RESUME_RETRY_MS = 60_000;
 const RESUME_NOTIFY_GRACE_MS = 90_000;
 const PAUSE_NOTIFY_GRACE_MS = 30_000;
 const TAKEOVER_RETRY_MS = 5 * 60_000;
 const GENERAL_FAILURE_RETRY_LIMIT = 30;
 const RATE_LIMIT_RETRY_LIMIT = 10;
-// EResults that auto-resume can never fix — credential-bad, account-level, or
-// protocol mismatch. Stop fast and require manual action instead of retrying.
-const TERMINAL_ERESULTS = new Set<number>([
-  5, 15, 26, 27, 126, // InvalidPassword, AccessDenied, Revoked, Expired, CachedCredentialInvalid
-  17, 43, 51, 69, 73, 95, 114, // Banned, AccountDisabled, Suspended, ParentalControlRestricted, AccountLockedDown, AccountLimitExceeded, AccountDeleted
-  7, 119, 120, // InvalidProtocolVer, LauncherMigrated, SteamRealmMismatch
-]);
-// EResults from logging in too often — back off hard, never hammer (a fast retry
-// escalates the Steam lockout from 30min to hours to 24h).
-const RATE_LIMIT_ERESULTS = new Set<number>([84, 87]); // RateLimitExceeded, AccountLoginDeniedThrottle
-// Subset of TERMINAL_ERESULTS where the stored refresh token itself is dead;
-// delete it so the next interactive start goes straight to a fresh login.
-const INVALID_TOKEN_ERESULTS = new Set<number>([5, 15, 26, 27, 126]);
 const BACKOFF_BASE_MS = 60_000;
 const BACKOFF_CAP_MS = 15 * 60 * 1000;
 const RATE_LIMIT_BACKOFF_CAP_MS = 30 * 60 * 1000;
@@ -107,6 +115,20 @@ let lastGoodPlaytime: { appid: number; playtime: number } | null = null;
 let takeoverDriftPending = false;
 let zombieStrike = 0;
 const unprobeableAppIds = new Set<number>();
+let sessionLive = false;
+let clientWired = false;
+let sessionGeneration = 0;
+let isLoggingOut = false;
+let libraryLoaded = false;
+let favoriteIds: number[] = [];
+let playingBlockedSince = 0;
+let resumeInfo: ResumeInfo | null = null;
+let webBridge: WebBridge | null = null;
+const processStartedAt = Date.now();
+
+function notifyChange(): void {
+  webBridge?.changed();
+}
 
 function bankElapsed(games: IdlingGame[], now = new Date()): void {
   for (const game of games) {
@@ -119,17 +141,6 @@ function isFrozen(): boolean {
   return isWaitingForResume || playingBlocked;
 }
 
-// "3m" / "2h 05m" for Telegram copy
-function formatDuration(ms: number): string {
-  const totalMinutes = Math.max(0, Math.floor(ms / 60000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours > 0 ? `${hours}h ${String(minutes).padStart(2, '0')}m` : `${minutes}m`;
-}
-
-// Announces a pause once per outage episode: delayed so a blip that reconnects
-// within the grace window stays silent, and never repeated while an announced
-// episode is still flapping (kicked again inside the resume grace).
 function schedulePauseNotification(reason: string): void {
   if (pauseNotified || pauseNotifyTimer) return;
   pauseEpisodeStart = Date.now();
@@ -152,6 +163,7 @@ function scheduleResumeNotification(): void {
 }
 
 function renderStatus(): void {
+  if (IS_WEB) return;
   showIdlingStatus(idlingGames, pausedGames, pausingGames, {
     waitingReason: isWaitingForResume ? waitingReason : null,
     playingBlocked,
@@ -165,6 +177,7 @@ function startDisplayLoop(): void {
     if (!startTime || isInEditMode) return;
     const changed = tickRandomizer();
     if (changed || process.stdout.isTTY) renderStatus();
+    notifyChange();
   }, 60000);
 }
 
@@ -236,7 +249,40 @@ function isTakeoverError(err: Error & { eresult?: number }): boolean {
   return /loggedinelsewhere|logonsessionreplaced/i.test(err.message ?? '');
 }
 
-// Freezes elapsed time and arms the resume poller after any disconnect or Steam error
+function silencePauseNotifications(): void {
+  if (pauseNotifyTimer) clearTimeout(pauseNotifyTimer);
+  if (resumeNotifyTimer) clearTimeout(resumeNotifyTimer);
+  pauseNotifyTimer = null;
+  resumeNotifyTimer = null;
+  pauseNotified = false;
+}
+
+function announceIdlingStarted(): void {
+  const exemptName = idlingGames.find((g) => g.nextPauseAtMs === null)?.name ?? null;
+  const startedSuffix = exemptName ? ` (exempt: ${exemptName})` : '';
+  telegram.send(`▶️ Idling started — ${idlingGames.length} games${startedSuffix}`);
+  if (IS_WEB) log.info('idle', `Idling started with ${countLabel(idlingGames.length, 'game')}${startedSuffix}`);
+}
+
+function warnFavoritesOverLimit(count: number): void {
+  if (count <= MAX_IDLE_GAMES) return;
+  log.warn('idle', `${count} favorites exceed the ${MAX_IDLE_GAMES}-game limit — idling the first ${MAX_IDLE_GAMES}.`, {
+    hint: `Keep at most ${MAX_IDLE_GAMES} favorites to choose which ones idle.`,
+  });
+}
+
+function scheduleResume(ms: number, kind: ResumeKind): void {
+  const now = Date.now();
+  resumeInfo = {
+    kind,
+    since: resumeInfo?.since ?? now,
+    nextRetryAt: now + ms,
+    attempt: transientFailureCount + rateLimitCount + 1,
+  };
+  resumeTimer = setTimeout(attemptResume, ms);
+  notifyChange();
+}
+
 function enterWaitingState(reason: string, isTakeover = false): void {
   if (isWaitingForResume || isShuttingDown) return;
   isWaitingForResume = true;
@@ -248,10 +294,20 @@ function enterWaitingState(reason: string, isTakeover = false): void {
   if (!playingBlocked) bankElapsed(idlingGames);
   stopDisplayLoop();
   if (!isInEditMode) renderStatus();
-  // A self-initiated relog (flush/zombie recovery) suppresses the pause message;
-  // restoreIdling emits a single quiet "🔄 flush" line instead.
-  if (!selfInitiatedRelog) schedulePauseNotification(reason);
-  resumeTimer = setTimeout(attemptResume, isTakeover ? TAKEOVER_RETRY_MS : RESUME_RETRY_MS);
+  if (!selfInitiatedRelog && startTime) schedulePauseNotification(reason);
+  if (selfInitiatedRelog) {
+    log.info('idle', 'Scheduled relog to commit playtime');
+  } else if (isTakeover) {
+    log.warn('idle', 'Steam session taken over by another device', {
+      hint: 'Nothing to do. steamidled tries again in a few minutes.',
+    });
+  } else {
+    log.warn('idle', `Idling paused: ${reason}`, { hint: 'Nothing to do. steamidled reconnects on its own.' });
+  }
+  scheduleResume(
+    isTakeover ? TAKEOVER_RETRY_MS : RESUME_RETRY_MS,
+    isTakeover ? 'taken-over' : 'reconnecting'
+  );
 }
 
 async function attemptResume(): Promise<void> {
@@ -266,30 +322,48 @@ async function attemptResume(): Promise<void> {
   }
 
   if (client.isReconnecting) {
-    resumeTimer = setTimeout(attemptResume, RESUME_RETRY_MS);
+    scheduleResume(RESUME_RETRY_MS, resumeInfo?.kind ?? 'reconnecting');
     return;
   }
   if (client.isConnecting) {
     client.abortPendingConnect();
-    resumeTimer = setTimeout(attemptResume, ABORT_SETTLE_MS);
+    scheduleResume(ABORT_SETTLE_MS, resumeInfo?.kind ?? 'reconnecting');
     return;
   }
 
   const credentials = loadCredentials();
   if (!credentials) {
-    showError('No stored credentials — cannot auto-resume');
+    if (IS_WEB) {
+      log.warn('steam', 'No stored login, cannot resume', { hint: 'Sign in again in the web GUI.' });
+      if (startTime && !stopNotified) {
+        telegram.send('🛑 Idling stopped — no stored credentials, cannot auto-resume.');
+        stopNotified = true;
+      }
+      silencePauseNotifications();
+      resumeInfo = null;
+      sessionLive = false;
+      webBridge?.sessionInvalid(false);
+      return;
+    }
+    log.error('steam', 'No stored credentials — cannot auto-resume', {
+      hint: 'Log in again, then restart steamidled.',
+      interactive: () => showError('No stored credentials — cannot auto-resume'),
+    });
     telegram.send('🛑 Idling stopped — no stored credentials, cannot auto-resume.');
     stopNotified = true;
     handleShutdown(0);
     return;
   }
+  const generation = sessionGeneration;
   try {
     const refreshToken = client.currentRefreshToken ?? credentials.refreshToken;
     await client.loginWithRefreshToken(refreshToken, credentials.accountName);
+    if (generation !== sessionGeneration) return;
     transientFailureCount = 0;
     rateLimitCount = 0;
     restoreIdling();
   } catch (err) {
+    if (generation !== sessionGeneration) return;
     const e = err as Error & { eresult?: number };
     const code = e.eresult;
     const label =
@@ -301,33 +375,63 @@ async function attemptResume(): Promise<void> {
     }
 
     if (code !== undefined && TERMINAL_ERESULTS.has(code)) {
-      showError(`Resume aborted — ${label} is not auto-recoverable. Manual re-login required.`);
-      telegram.send(`🛑 Idling stopped — ${label}. Manual re-login required.`);
-      stopNotified = true;
-      if (INVALID_TOKEN_ERESULTS.has(code)) clearCredentials();
+      const message = `Resume aborted — ${label} is not auto-recoverable. Manual re-login required.`;
+      const invalidToken = INVALID_TOKEN_ERESULTS.has(code);
+      log.error('steam', message, {
+        hint: invalidToken ? 'Sign in to Steam again.' : 'Check the Steam account, then try again.',
+        interactive: () => showError(message),
+      });
+      if (!IS_WEB || (startTime && !stopNotified)) {
+        telegram.send(`🛑 Idling stopped — ${label}. Manual re-login required.`);
+        stopNotified = true;
+      }
+      if (invalidToken) clearCredentials();
+      if (IS_WEB) {
+        silencePauseNotifications();
+        resumeInfo = resumeInfo && { ...resumeInfo, nextRetryAt: null };
+        if (invalidToken) {
+          sessionLive = false;
+          webBridge?.sessionInvalid(true);
+        } else {
+          webBridge?.sessionFatal({
+            message: `Steam refused the session (${label})`,
+            hint: 'This does not fix itself. Check the account in the Steam app, then try again.',
+          });
+        }
+        return;
+      }
       handleShutdown(0);
       return;
     }
 
     if (code !== undefined && RATE_LIMIT_ERESULTS.has(code)) {
       rateLimitCount += 1;
-      if (rateLimitCount >= RATE_LIMIT_RETRY_LIMIT) {
-        showError(`Resume failed after ${RATE_LIMIT_RETRY_LIMIT} rate-limited attempts: ${label}`);
+      if (!IS_WEB && rateLimitCount >= RATE_LIMIT_RETRY_LIMIT) {
+        const message = `Resume failed after ${RATE_LIMIT_RETRY_LIMIT} rate-limited attempts: ${label}`;
+        log.error('steam', message, {
+          hint: 'Wait at least 30 minutes before starting steamidled again.',
+          interactive: () => showError(message),
+        });
         telegram.send(`🛑 Idling stopped — rate-limited ${RATE_LIMIT_RETRY_LIMIT}× (${label}).`);
         stopNotified = true;
         handleShutdown(1);
         return;
       }
-      resumeTimer = setTimeout(
-        attemptResume,
-        Math.max(RATE_LIMIT_MIN_WAIT_MS, backoffMs(rateLimitCount, RATE_LIMIT_BACKOFF_CAP_MS))
-      );
+      const waitMs = Math.max(RATE_LIMIT_MIN_WAIT_MS, backoffMs(rateLimitCount, RATE_LIMIT_BACKOFF_CAP_MS));
+      log.warn('steam', `Steam is rate limiting sign-ins (${label})`, {
+        hint: `Nothing to do. steamidled tries again in ${formatWait(waitMs)}.`,
+      });
+      scheduleResume(waitMs, 'rate-limited');
       return;
     }
 
     transientFailureCount += 1;
-    if (transientFailureCount >= GENERAL_FAILURE_RETRY_LIMIT) {
-      showError(`Resume failed after ${GENERAL_FAILURE_RETRY_LIMIT} attempts: ${label}`);
+    if (!IS_WEB && transientFailureCount >= GENERAL_FAILURE_RETRY_LIMIT) {
+      const message = `Resume failed after ${GENERAL_FAILURE_RETRY_LIMIT} attempts: ${label}`;
+      log.error('steam', message, {
+        hint: "Check the server's internet connection and Steam's status, then restart steamidled.",
+        interactive: () => showError(message),
+      });
       telegram.send(
         `🛑 Idling stopped — failed to reconnect after ${GENERAL_FAILURE_RETRY_LIMIT}× (last error: ${label}).`
       );
@@ -335,7 +439,11 @@ async function attemptResume(): Promise<void> {
       handleShutdown(1);
       return;
     }
-    resumeTimer = setTimeout(attemptResume, backoffMs(transientFailureCount, BACKOFF_CAP_MS));
+    const retryMs = backoffMs(transientFailureCount, BACKOFF_CAP_MS);
+    log.warn('steam', `Reconnect failed (${label})`, {
+      hint: `Nothing to do. steamidled tries again in ${formatWait(retryMs)}.`,
+    });
+    scheduleResume(retryMs, 'reconnecting');
   }
 }
 
@@ -349,10 +457,7 @@ function restoreIdling(): void {
   waitingReason = '';
   transientFailureCount = 0;
   rateLimitCount = 0;
-  // A fresh session starts unblocked; Steam re-reports a block via playingState
-  // right after logon, which handlePlayingState turns into a transition. Games
-  // paused by a block before the disconnect must rejoin now: Steam sends no
-  // "unblocked" event on logon, and its echo after gamesPlayed is not one either.
+  resumeInfo = null;
   playingBlocked = false;
   const now = new Date();
   releasePausedGames(now);
@@ -370,6 +475,9 @@ function restoreIdling(): void {
   if (selfInitiatedRelog) {
     selfInitiatedRelog = false;
     telegram.send('🔄 flush — playtime committed, session refreshed');
+    log.info('idle', 'Relog done, playtime committed');
+  } else {
+    log.info('idle', `Reconnected to Steam, idling ${idlingGames.length} games`);
   }
   scheduleResumeNotification();
 
@@ -377,6 +485,7 @@ function restoreIdling(): void {
     if (lastGoodPlaytime) reportTakeoverDrift(lastGoodPlaytime);
     takeoverDriftPending = false;
   }
+  notifyChange();
 }
 
 function reportTakeoverDrift(lastGood: { appid: number; playtime: number }): void {
@@ -414,7 +523,7 @@ function scheduleDailyReport(): void {
       endedDay,
       isFrozen()
     );
-    telegram.send(report);
+    if (startTime) telegram.send(report);
     snapshotDayStart();
     scheduleDailyReport();
   }, msUntilNextMidnight());
@@ -516,16 +625,20 @@ async function runZombieCheck(): Promise<void> {
   }
 
   telegram.send('⚠️ Zombie session — playtime not committing after a relog. Forcing reconnect.');
+  log.warn('idle', 'Zombie session: playtime not committing after a relog', {
+    hint: 'Nothing to do. steamidled forces a reconnect.',
+  });
   zombieStrike = 0;
   zombieBaseline = null;
   forceFlushRelog();
 }
 
 function scheduleZombieCheck(): void {
-  zombieTimer = setTimeout(async () => {
+  const timer = setTimeout(async () => {
     await runZombieCheck();
-    scheduleZombieCheck();
+    if (zombieTimer === timer) scheduleZombieCheck();
   }, ZOMBIE_CHECK_INTERVAL_MS);
+  zombieTimer = timer;
 }
 
 function showHelp(): void {
@@ -534,6 +647,7 @@ function showHelp(): void {
 Usage:
   steamidled                   Interactive mode (login, pick games, idle)
   steamidled --headless        Headless mode: auto-login and idle your favorites
+  steamidled --web             Headless mode with a web GUI on port ${WEB_DEFAULT_PORT} (STEAMIDLED_WEB_PORT)
   steamidled --setup-telegram  (Re)configure Telegram notifications
   steamidled --logout          Forget the saved Steam login
   steamidled --version, -v     Print version
@@ -587,16 +701,19 @@ async function main(): Promise<void> {
 
   client.onRefreshToken((refreshToken) => {
     const stored = loadCredentials();
-    const name = stored?.accountName ?? accountName;
+    const name = client.accountName ?? (accountName || stored?.accountName);
     if (!name) return;
-    if (!saveCredentials({ ...stored, accountName: name, refreshToken })) {
+    const base = stored?.accountName === name ? stored : undefined;
+    if (!saveCredentials({ ...base, accountName: name, refreshToken })) {
       telegram.send(
         '⚠️ Steam renewed the login token but it could not be saved — the next restart will need an interactive login.'
       );
     }
   });
 
-  if (isHeadless) {
+  if (IS_WEB) {
+    await runWeb();
+  } else if (isHeadless) {
     await runHeadless();
   } else {
     await runInteractive();
@@ -609,7 +726,7 @@ const HEADLESS_EXIT_TRANSIENT = 1;
 const HEADLESS_EXIT_CONFIG = 2;
 
 async function failHeadless(message: string, exitCode: number): Promise<never> {
-  showError(message);
+  log.error('steam', message, { interactive: () => showError(message) });
   const sent = telegram.send(`🛑 Headless start failed — ${message}`);
   try {
     if (client.isConnected) client.logout();
@@ -631,7 +748,9 @@ async function runHeadless(): Promise<void> {
     rateLimitedAttempts += 1;
     if (rateLimitedAttempts >= RATE_LIMIT_RETRY_LIMIT) break;
     const waitMs = Math.max(RATE_LIMIT_MIN_WAIT_MS, backoffMs(rateLimitedAttempts, RATE_LIMIT_BACKOFF_CAP_MS));
-    console.log(chalk.yellow(`Rate limited by Steam — retrying login in ${formatDuration(waitMs)}.`));
+    log.warn('steam', `Rate limited by Steam — retrying login in ${formatDuration(waitMs)}.`, {
+      hint: 'Nothing to do. Do not restart steamidled meanwhile, every early login extends the lockout.',
+    });
     if (rateLimitedAttempts === 1) telegram.send('⏸️ Headless start rate-limited by Steam — waiting before retrying.');
     await new Promise((resolve) => setTimeout(resolve, waitMs));
     loginResult = await loginWithStoredCredentials(client);
@@ -680,20 +799,14 @@ async function runHeadless(): Promise<void> {
   }
 
   const selectedGames = matchingGames.slice(0, MAX_IDLE_GAMES);
-  if (matchingGames.length > MAX_IDLE_GAMES) {
-    console.log(
-      chalk.yellow(
-        `${matchingGames.length} favorites exceed the ${MAX_IDLE_GAMES}-game limit — idling the first ${MAX_IDLE_GAMES}.`
-      )
-    );
-  }
+  warnFavoritesOverLimit(matchingGames.length);
 
   const exemptName =
     exemptAppId && selectedGames.some((g) => g.appid === exemptAppId)
       ? gamesById.get(exemptAppId)?.name ?? null
       : null;
-  console.log(`Starting ${selectedGames.length} favorite game(s)...`);
-  if (exemptName) console.log(`Exempt from randomizer: ${exemptName}`);
+  log.info('idle', `Starting ${selectedGames.length} favorite game(s)...`);
+  if (exemptName) log.info('idle', `Exempt from randomizer: ${exemptName}`);
   startIdling(selectedGames);
 }
 
@@ -861,75 +974,11 @@ async function enterEditMode(): Promise<void> {
 
   if (newSelection.length === 0) {
     showError('No games selected - keeping current selection');
+    if (!isWaitingForResume) {
+      client.setGamesPlaying(idlingGames.map((g) => g.appid));
+    }
   } else {
-    const oldAppIds = new Set(
-      [...idlingGames, ...pausedGames, ...pausingGames].map((g) => g.appid)
-    );
-    const newAppIds = new Set(newSelection.map((g) => g.appid));
-
-    const applyExemptChange = (game: IdlingGame): void => {
-      const shouldBeExempt = game.appid === newExemptAppId;
-      const wasExempt = game.nextPauseAtMs === null;
-      if (shouldBeExempt && !wasExempt) {
-        game.nextPauseAtMs = null;
-        game.pauseUntil = null;
-      } else if (!shouldBeExempt && wasExempt) {
-        game.nextPauseAtMs = game.accumulatedMs + randomIdlePhaseMs();
-      }
-    };
-
-    const keptIdlingGames: IdlingGame[] = [];
-    const keptPausedGames: IdlingGame[] = [];
-    const keptPausingGames: IdlingGame[] = [];
-
-    // Kept idling games keep their running clock: the selector time was idled
-    // too. A block or disconnect that landed meanwhile already owns startTime.
-    for (const game of idlingGames) {
-      if (newAppIds.has(game.appid)) {
-        applyExemptChange(game);
-        keptIdlingGames.push(game);
-      }
-    }
-
-    for (const game of pausedGames) {
-      if (newAppIds.has(game.appid)) {
-        applyExemptChange(game);
-        keptPausedGames.push(game);
-      }
-    }
-
-    for (const game of pausingGames) {
-      if (newAppIds.has(game.appid)) {
-        applyExemptChange(game);
-        // Becoming exempt clears pauseUntil — game rejoins idling immediately
-        if (game.nextPauseAtMs === null) {
-          game.startTime = new Date();
-          keptIdlingGames.push(game);
-        } else {
-          keptPausingGames.push(game);
-        }
-      }
-    }
-
-    for (const selection of newSelection) {
-      if (!oldAppIds.has(selection.appid)) {
-        const steamGame = gamesById.get(selection.appid);
-        const isExempt = selection.appid === newExemptAppId;
-        keptIdlingGames.push(createIdlingGame(selection, steamGame, isExempt));
-      }
-    }
-
-    idlingGames = keptIdlingGames;
-    pausedGames = keptPausedGames;
-    pausingGames = keptPausingGames;
-    exemptAppId = newExemptAppId;
-  }
-
-  // Always re-send on the way out, selection changed or not: an unblock that
-  // arrived while the selector was open deferred its re-send to here, and Steam
-  // does not restore a blocked session's list on its own.
-  if (!isWaitingForResume) {
-    client.setGamesPlaying(idlingGames.map((g) => g.appid));
+    applySelection(newSelection, newExemptAppId);
   }
 
   if (process.stdin.isTTY) {
@@ -942,9 +991,73 @@ async function enterEditMode(): Promise<void> {
 
   if (!startTime) return;
   renderStatus();
-  // A disconnect that landed while the selector was open leaves us waiting:
-  // keep the clocks frozen and let restoreIdling restart the loop.
   if (!isWaitingForResume) startDisplayLoop();
+}
+
+function applySelection(selection: GameSelection[], nextExemptAppId: number | null): void {
+  const newSelection = selection.slice(0, MAX_IDLE_GAMES);
+  const oldAppIds = new Set(
+    [...idlingGames, ...pausedGames, ...pausingGames].map((g) => g.appid)
+  );
+  const newAppIds = new Set(newSelection.map((g) => g.appid));
+
+  const applyExemptChange = (game: IdlingGame): void => {
+    const shouldBeExempt = game.appid === nextExemptAppId;
+    const wasExempt = game.nextPauseAtMs === null;
+    if (shouldBeExempt && !wasExempt) {
+      game.nextPauseAtMs = null;
+      game.pauseUntil = null;
+    } else if (!shouldBeExempt && wasExempt) {
+      game.nextPauseAtMs = game.accumulatedMs + randomIdlePhaseMs();
+    }
+  };
+
+  const keptIdlingGames: IdlingGame[] = [];
+  const keptPausedGames: IdlingGame[] = [];
+  const keptPausingGames: IdlingGame[] = [];
+
+  for (const game of idlingGames) {
+    if (newAppIds.has(game.appid)) {
+      applyExemptChange(game);
+      keptIdlingGames.push(game);
+    }
+  }
+
+  for (const game of pausedGames) {
+    if (newAppIds.has(game.appid)) {
+      applyExemptChange(game);
+      keptPausedGames.push(game);
+    }
+  }
+
+  for (const game of pausingGames) {
+    if (newAppIds.has(game.appid)) {
+      applyExemptChange(game);
+      if (game.nextPauseAtMs === null) {
+        game.startTime = new Date();
+        keptIdlingGames.push(game);
+      } else {
+        keptPausingGames.push(game);
+      }
+    }
+  }
+
+  for (const entry of newSelection) {
+    if (!oldAppIds.has(entry.appid)) {
+      const steamGame = gamesById.get(entry.appid);
+      const isExempt = entry.appid === nextExemptAppId;
+      keptIdlingGames.push(createIdlingGame(entry, steamGame, isExempt));
+    }
+  }
+
+  idlingGames = keptIdlingGames;
+  pausedGames = keptPausedGames;
+  pausingGames = keptPausingGames;
+  exemptAppId = nextExemptAppId;
+
+  if (!isWaitingForResume) {
+    client.setGamesPlaying(idlingGames.map((g) => g.appid));
+  }
 }
 
 function releasePausedGames(now: Date): void {
@@ -972,6 +1085,12 @@ function handlePlayingState(blocked: boolean, playingApp: number): void {
   if (blocked === playingBlocked) return;
   playingBlocked = blocked;
   const now = new Date();
+  if (blocked) {
+    playingBlockedSince = now.getTime();
+    log.info('idle', 'Paused while a game runs on this account on another device');
+  } else {
+    log.info('idle', 'The other device stopped playing, idling continues');
+  }
 
   if (blocked) {
     if (!isWaitingForResume) bankElapsed(idlingGames, now);
@@ -999,6 +1118,7 @@ function handlePlayingState(blocked: boolean, playingApp: number): void {
   if (isInEditMode || isWaitingForResume) return;
   if (!blocked) client.setGamesPlaying(idlingGames.map((g) => g.appid));
   renderStatus();
+  notifyChange();
 }
 
 function startIdling(games: GameSelection[]): void {
@@ -1013,6 +1133,7 @@ function startIdling(games: GameSelection[]): void {
   pausingGames = [];
 
   playingBlocked = client.isPlayingBlocked;
+  if (playingBlocked) playingBlockedSince = Date.now();
 
   const appIds = games.map((g) => g.appid);
   client.setGamesPlaying(appIds);
@@ -1022,10 +1143,36 @@ function startIdling(games: GameSelection[]): void {
   renderStatus();
   startDisplayLoop();
 
-  client.onPlayingState(handlePlayingState);
+  ensureClientWiring();
+  sessionLive = true;
+
+  snapshotDayStart();
+  scheduleDailyReport();
+  scheduleFlush();
+  scheduleZombieCheck();
+
+  announceIdlingStarted();
+
+  if (!client.isConnected) {
+    enterWaitingState('disconnected before idling started');
+  }
+}
+
+function ensureClientWiring(): void {
+  if (clientWired) return;
+  clientWired = true;
+
+  client.onPlayingState((blocked, playingApp) => {
+    if (!sessionLive) return;
+    handlePlayingState(blocked, playingApp);
+  });
 
   client.onDisconnected((eresult, msg) => {
-    if (isShuttingDown) return;
+    if (isLoggingOut) {
+      isLoggingOut = false;
+      return;
+    }
+    if (!sessionLive || isShuttingDown) return;
     const isTakeover = TAKEOVER_ERESULTS.has(eresult);
     if (isTakeover) selfInitiatedRelog = false;
     if (isTakeover && lastGoodPlaytime) takeoverDriftPending = true;
@@ -1035,24 +1182,31 @@ function startIdling(games: GameSelection[]): void {
       ? 'player active on this account elsewhere'
       : `disconnected (${msg}, eresult ${eresult})`;
     if (!isInEditMode && !selfInitiatedRelog) {
-      console.log(`\nDisconnected from Steam: ${msg} (${eresult})`);
+      log.warn('steam', `Disconnected from Steam: ${msg} (${eresult})`, {
+        interactive: () => console.log(`\nDisconnected from Steam: ${msg} (${eresult})`),
+      });
     }
     enterWaitingState(reason, isTakeover);
   });
 
   client.onError((err) => {
-    if (isShuttingDown) return;
+    if (!sessionLive || isShuttingDown) return;
     const isTakeover = isTakeoverError(err);
     if (isTakeover) selfInitiatedRelog = false;
     if (isTakeover && lastGoodPlaytime) takeoverDriftPending = true;
     const reason = isTakeover
       ? 'player active on this account elsewhere'
       : `Steam error: ${err.message}`;
-    if (!isInEditMode) console.log(`\nSteam error: ${err.message}`);
+    if (!isInEditMode) {
+      log.warn('steam', `Steam error: ${err.message}`, {
+        interactive: () => console.log(`\nSteam error: ${err.message}`),
+      });
+    }
     enterWaitingState(reason, isTakeover);
   });
 
   client.onLoggedOn(() => {
+    if (!sessionLive) return;
     if (isWaitingForResume) {
       if (resumeTimer) {
         clearTimeout(resumeTimer);
@@ -1063,27 +1217,277 @@ function startIdling(games: GameSelection[]): void {
       restoreIdling();
     }
   });
+}
 
-  snapshotDayStart();
-  scheduleDailyReport();
-  scheduleFlush();
-  scheduleZombieCheck();
+function clearTimer(timer: NodeJS.Timeout | null): null {
+  if (timer) clearTimeout(timer);
+  return null;
+}
 
-  // Announce the exempt game only if it is actually among the idled ones
-  const exemptName = idlingGames.find((g) => g.nextPauseAtMs === null)?.name ?? null;
-  const startedSuffix = exemptName ? ` (exempt: ${exemptName})` : '';
-  telegram.send(`▶️ Idling started — ${idlingGames.length} games${startedSuffix}`);
+function resetSession(): void {
+  sessionGeneration += 1;
+  resumeTimer = clearTimer(resumeTimer);
+  pauseNotifyTimer = clearTimer(pauseNotifyTimer);
+  resumeNotifyTimer = clearTimer(resumeNotifyTimer);
+  flushTimer = clearTimer(flushTimer);
+  zombieTimer = clearTimer(zombieTimer);
+  midnightTimer = clearTimer(midnightTimer);
+  stopDisplayLoop();
+  isWaitingForResume = false;
+  waitingReason = '';
+  selfInitiatedRelog = false;
+  playingBlocked = false;
+  playingBlockedSince = 0;
+  takeoverDriftPending = false;
+  zombieBaseline = null;
+  lastGoodPlaytime = null;
+  zombieStrike = 0;
+  unprobeableAppIds.clear();
+  transientFailureCount = 0;
+  rateLimitCount = 0;
+  pauseNotified = false;
+  pauseEpisodeStart = 0;
+  resumeInfo = null;
+  idlingGames = [];
+  pausedGames = [];
+  pausingGames = [];
+  startTime = null;
+  isIdling = false;
+  sessionLive = false;
+  stopNotified = false;
+  accountName = '';
+  allGames = [];
+  gamesById = new Map();
+  exemptAppId = null;
+  libraryLoaded = false;
+  favoriteIds = [];
+  dayStartAccumulatedMs.clear();
+  notifyChange();
+}
 
-  // A kick or drop between login and here (e.g. while the selector was open)
-  // had no handler yet; without this the screen would say "Idling" forever
-  // while nothing is played and no resume is ever attempted.
-  if (!client.isConnected) {
-    enterWaitingState('disconnected before idling started');
+function ensureSessionTimers(nonEmpty: boolean): void {
+  if (nonEmpty && !startTime) {
+    startTime = new Date();
+    isIdling = true;
+    stopNotified = false;
+    if (!flushTimer) scheduleFlush();
+    if (!zombieTimer) scheduleZombieCheck();
+    snapshotDayStart();
+    if (!midnightTimer) scheduleDailyReport();
+    if (!isWaitingForResume) startDisplayLoop();
+    announceIdlingStarted();
+    return;
+  }
+  if (!nonEmpty && startTime) {
+    flushTimer = clearTimer(flushTimer);
+    zombieTimer = clearTimer(zombieTimer);
+    startTime = null;
+    isIdling = false;
   }
 }
 
-// Graceful shutdown handler that saves state and logs out. exitCode lets the
-// auto-resume give-up paths signal a restartable failure (1) vs a clean stop (0).
+function sessionAppIds(): number[] {
+  return [...idlingGames, ...pausedGames, ...pausingGames].map((g) => g.appid);
+}
+
+function selectionFromAppIds(appIds: number[]): GameSelection[] {
+  return appIds.flatMap((appid) => {
+    const game = gamesById.get(appid);
+    return game ? [{ appid, name: game.name }] : [];
+  });
+}
+
+function webStop(): void {
+  const hadGames = sessionAppIds().length > 0;
+  if (!isFrozen()) bankElapsed(idlingGames);
+  client.stopPlaying();
+  idlingGames = [];
+  pausedGames = [];
+  pausingGames = [];
+  silencePauseNotifications();
+  ensureSessionTimers(false);
+  if (hadGames) {
+    telegram.send('🛑 Idling stopped — stopped in the web GUI');
+    log.info('idle', 'Idling stopped in the web GUI');
+  }
+  notifyChange();
+}
+
+function webApplySelection(appIds: number[]): void {
+  if (appIds.length === 0) {
+    webStop();
+    return;
+  }
+  const wasIdling = startTime !== null;
+  if (!isFrozen()) bankElapsed(idlingGames);
+  applySelection(selectionFromAppIds(appIds), exemptAppId);
+  ensureSessionTimers(true);
+  if (wasIdling) log.info('idle', `Selection changed, now idling ${countLabel(sessionAppIds().length, 'game')}`);
+  notifyChange();
+}
+
+function webStartFavorites(): number {
+  const missing = favoriteIds.filter((appid) => !gamesById.has(appid));
+  if (missing.length > 0) {
+    log.warn('idle', `Skipped ${missing.length} favorite(s) missing from the library: ${missing.join(', ')}`, {
+      hint: 'Remove them from favorites, or restart steamidled if the library was incomplete.',
+    });
+  }
+  const available = favoriteIds.filter((appid) => gamesById.has(appid));
+  warnFavoritesOverLimit(available.length);
+  const selected = available.slice(0, MAX_IDLE_GAMES);
+  if (selected.length > 0) webApplySelection(selected);
+  return selected.length;
+}
+
+function webSetExempt(appId: number | null): boolean {
+  if (!saveExempt(accountName, appId)) return false;
+  const appIds = sessionAppIds();
+  if (appIds.length > 0) {
+    if (!isFrozen()) bankElapsed(idlingGames);
+    applySelection(selectionFromAppIds(appIds), appId);
+  } else {
+    exemptAppId = appId;
+  }
+  const name = appId === null ? null : gamesById.get(appId)?.name ?? `App ${appId}`;
+  log.info('idle', name ? `Exempt from cooldown: ${name}` : 'No game is exempt from cooldown');
+  notifyChange();
+  return true;
+}
+
+function webSetFavorite(appId: number, favorite: boolean): boolean {
+  const without = favoriteIds.filter((id) => id !== appId);
+  const next = favorite ? [...without, appId] : without;
+  if (favorite && favoriteIds.includes(appId)) return true;
+  if (!saveFavorites(accountName, next)) return false;
+  favoriteIds = next;
+  notifyChange();
+  return true;
+}
+
+function webLogout(): void {
+  if (startTime && !stopNotified) {
+    telegram.send('🛑 Idling stopped — logged out in the web GUI');
+  }
+  silencePauseNotifications();
+  if (client.isConnected) {
+    client.stopPlaying();
+    isLoggingOut = true;
+  } else {
+    client.abortPendingConnect();
+  }
+  client.logout();
+  clearCredentials();
+  resetSession();
+  log.info('steam', 'Logged out, the saved login was removed');
+}
+
+function webBeginSession(name: string): SessionStart {
+  ensureClientWiring();
+  if (name === accountName && libraryLoaded) {
+    const announce = stopNotified && startTime !== null;
+    sessionLive = true;
+    stopNotified = false;
+    if (isWaitingForResume) {
+      resumeTimer = clearTimer(resumeTimer);
+      restoreIdling();
+    } else {
+      client.setGamesPlaying(idlingGames.map((g) => g.appid));
+    }
+    if (announce) announceIdlingStarted();
+    const playing = client.steamUser.playingState;
+    if (client.isPlayingBlocked && !playingBlocked) handlePlayingState(true, playing?.appid ?? 0);
+    notifyChange();
+    return 'resumed';
+  }
+  resetSession();
+  accountName = name;
+  playingBlocked = client.isPlayingBlocked;
+  if (playingBlocked) playingBlockedSince = Date.now();
+  sessionLive = true;
+  notifyChange();
+  return 'fresh';
+}
+
+async function webLoadLibrary(): Promise<number | null> {
+  const generation = sessionGeneration;
+  const games = await client.getOwnedGames();
+  if (generation !== sessionGeneration) return null;
+  allGames = games;
+  gamesById = new Map(games.map((g) => [g.appid, g]));
+  favoriteIds = loadFavorites(accountName);
+  exemptAppId = loadExempt(accountName);
+  libraryLoaded = true;
+  log.info('steam', `Library loaded: ${countLabel(games.length, 'game')}`);
+  notifyChange();
+  return games.length;
+}
+
+function webRetryResume(): void {
+  if (resumeTimer || !isWaitingForResume) return;
+  const announce = stopNotified && startTime !== null;
+  sessionLive = true;
+  stopNotified = false;
+  if (announce) announceIdlingStarted();
+  scheduleResume(0, resumeInfo?.kind ?? 'reconnecting');
+}
+
+function webStoredFavorites(): number[] {
+  const credentials = loadCredentials();
+  return credentials ? loadFavorites(credentials.accountName) : [];
+}
+
+function engineState(): EngineState {
+  return {
+    sessionLive,
+    accountName,
+    libraryLoaded,
+    allGames,
+    gamesById,
+    favorites: favoriteIds,
+    exemptAppId,
+    idlingGames,
+    pausedGames,
+    pausingGames,
+    startTime,
+    isWaitingForResume,
+    selfInitiatedRelog,
+    playingBlocked,
+    playingBlockedSince,
+    resumeInfo,
+  };
+}
+
+const engine: Engine = {
+  client,
+  telegram,
+  get version() {
+    return packageVersion();
+  },
+  startedAt: processStartedAt,
+  state: engineState,
+  loginRetryDelay: (rateLimited, attempt) =>
+    rateLimited
+      ? Math.max(RATE_LIMIT_MIN_WAIT_MS, backoffMs(attempt, RATE_LIMIT_BACKOFF_CAP_MS))
+      : backoffMs(attempt, BACKOFF_CAP_MS),
+  storedFavorites: webStoredFavorites,
+  beginSession: webBeginSession,
+  loadLibrary: webLoadLibrary,
+  startFavorites: webStartFavorites,
+  applySelection: webApplySelection,
+  stop: webStop,
+  setExempt: webSetExempt,
+  setFavorite: webSetFavorite,
+  logout: webLogout,
+  retryResume: webRetryResume,
+};
+
+async function runWeb(): Promise<void> {
+  ensureClientWiring();
+  const { startWebController } = await import('./web/controller.js');
+  webBridge = await startWebController(engine);
+}
+
 function handleShutdown(exitCode = 0): void {
   if (isShuttingDown) return;
   isShuttingDown = true;
@@ -1124,8 +1528,12 @@ function handleShutdown(exitCode = 0): void {
       client.logout();
     }
   } catch (err) {
-    console.error('Logout failed:', (err as Error).message);
+    log.error('steam', 'Logout failed', {
+      cause: err,
+      interactive: () => console.error('Logout failed:', (err as Error).message),
+    });
   }
+  webBridge?.stop();
 
   const finalMessage =
     !stopNotified && startTime ? telegram.send('🛑 Idling stopped — quit by user') : Promise.resolve();
@@ -1138,7 +1546,12 @@ function handleShutdown(exitCode = 0): void {
 function handleCrash(err: unknown): void {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  console.error('\nFatal error:', err);
+  log.error('steam', 'Fatal error', {
+    cause: err instanceof Error ? err.stack ?? err.message : err,
+    hint: 'Report this at https://github.com/louisraetz/steamidled/issues with the lines above.',
+    interactive: () => console.error('\nFatal error:', err),
+  });
+  webBridge?.stop();
 
   if (resumeTimer) clearTimeout(resumeTimer);
   if (resumeNotifyTimer) clearTimeout(resumeNotifyTimer);
@@ -1175,6 +1588,6 @@ main().catch((err: Error) => {
     showGoodbye();
     process.exit(0);
   }
-  showError(err.message);
+  log.error('steam', err.message, { interactive: () => showError(err.message) });
   process.exit(1);
 });
