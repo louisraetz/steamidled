@@ -7,6 +7,8 @@ services:
     restart: on-failure:5
     environment:
       TZ: Europe/Berlin
+    ports:
+      - "127.0.0.1:${STEAMIDLED_WEB_PORT:-4821}:4821"
     volumes:
       - steamidled-config:/home/node/.steam-idler
 

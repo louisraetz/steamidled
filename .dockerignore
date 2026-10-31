@@ -9,3 +9,5 @@ docs
 *.md
 !README.md
 docker-compose.yml
+web/node_modules
+web/dist
