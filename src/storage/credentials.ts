@@ -7,17 +7,12 @@ import type { StoredCredentials } from '../types/index.js';
 const CONFIG_DIR = join(homedir(), '.steam-idler');
 const CREDENTIALS_FILE = join(CONFIG_DIR, 'credentials.json');
 
-// Ensures the config directory exists, creating it if necessary
 function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
 }
 
-// Saves user credentials to a JSON file for persistent login.
-// Owner-only perms (0600) — the file holds a Steam refresh token.
-// Returns false (and warns) instead of throwing when the directory is not
-// writable, so a login still completes for this session.
 export function saveCredentials(credentials: StoredCredentials): boolean {
   try {
     ensureConfigDir();
@@ -29,10 +24,6 @@ export function saveCredentials(credentials: StoredCredentials): boolean {
   }
 }
 
-// A Steam refresh token is a JWT whose payload has iss "steam" and "client" in
-// aud. steam-user decodes it inside process.nextTick and throws uncatchably on
-// anything else (and logs on anonymously when handed undefined), so a token
-// that would not pass its checks is treated as "no credentials" instead.
 function isSteamRefreshToken(token: string): boolean {
   const segments = token.split('.');
   if (segments.length !== 3) return false;
@@ -64,19 +55,14 @@ function isValidCredentials(value: unknown): value is StoredCredentials {
   );
 }
 
-// Loads stored credentials from the JSON file, returning null if not found or
-// unusable. A corrupt file is removed so the next start does not loop on it; a
-// file that merely could not be read (permissions, I/O) is left alone.
 export function loadCredentials(): StoredCredentials | null {
   if (!existsSync(CREDENTIALS_FILE)) {
     return null;
   }
 
-  // Migrate older world-readable files written before 0600 was enforced.
   try {
     chmodSync(CREDENTIALS_FILE, 0o600);
   } catch {
-    // Platforms without POSIX perms (or a perms error) — best effort only.
   }
 
   let raw: string;
@@ -101,7 +87,6 @@ export function loadCredentials(): StoredCredentials | null {
   return parsed;
 }
 
-// Deletes the stored credentials file
 export function clearCredentials(): void {
   try {
     if (existsSync(CREDENTIALS_FILE)) {
@@ -112,7 +97,6 @@ export function clearCredentials(): void {
   }
 }
 
-// Checks if usable stored credentials exist
 export function hasStoredCredentials(): boolean {
   return loadCredentials() !== null;
 }

@@ -83,7 +83,6 @@ export async function loginWithQR(client: SteamClient): Promise<LoginResult> {
   });
 }
 
-// Authenticates via username and password with Steam Guard support
 export async function loginWithCredentials(client: SteamClient): Promise<LoginResult> {
   const session = new LoginSession(EAuthTokenPlatformType.SteamClient);
   session.loginTimeout = LOGIN_TIMEOUT_MS;
@@ -98,8 +97,6 @@ export async function loginWithCredentials(client: SteamClient): Promise<LoginRe
   });
 
   const spinner = createSpinner('Logging in...').start();
-  // Closes an open Steam Guard code prompt when the login settles another way
-  // (phone approval, timeout, error), so two prompts never fight over stdin.
   const promptAbort = new AbortController();
 
   return new Promise((resolve) => {
@@ -109,14 +106,10 @@ export async function loginWithCredentials(client: SteamClient): Promise<LoginRe
       settled = true;
       spinner.stop();
       promptAbort.abort();
-      // Stop steam-session's polling, or a phone approval after we gave up
-      // would still log the client on behind the method picker.
       session.cancelLoginAttempt();
       resolve(result);
     };
 
-    // Asks for a Steam Guard code, re-prompting on a rejected code. Returns
-    // silently when the prompt was aborted because the login settled elsewhere.
     const promptGuardCode = async (action: GuardAction): Promise<void> => {
       const isEmail = action.type === EAuthSessionGuardType.EmailCode;
       const source = isEmail ? `email${action.detail ? ` to ${action.detail}` : ''}` : 'mobile app';
@@ -127,9 +120,6 @@ export async function loginWithCredentials(client: SteamClient): Promise<LoginRe
         try {
           code = await input({ message: 'Enter Steam Guard code:' }, { signal: promptAbort.signal });
         } catch (err) {
-          // AbortPromptError: the login settled elsewhere (phone approval,
-          // timeout, error). Anything else is Ctrl+C: with email Steam Guard
-          // nothing polls, so without this the login would never settle.
           if ((err as Error).name !== 'AbortPromptError') {
             finish({ success: false, error: 'Login cancelled' });
           }
@@ -141,8 +131,6 @@ export async function loginWithCredentials(client: SteamClient): Promise<LoginRe
           return;
         } catch (err) {
           spinner.stop();
-          // The approval may have landed while this code was in flight: the
-          // library then cancels the attempt and this rejection is noise.
           if (settled || promptAbort.signal.aborted) return;
           const message = (err as Error).message;
           if (attempt === GUARD_CODE_ATTEMPTS) {
@@ -155,12 +143,8 @@ export async function loginWithCredentials(client: SteamClient): Promise<LoginRe
     };
 
     session.on('authenticated', async () => {
-      // Steam accepted the login (e.g. phone approval): close the code prompt
-      // right away so nothing can be submitted into a finished session.
       promptAbort.abort();
       const refreshToken = session.refreshToken;
-      // Steam's canonical account name keys the favorites file; the typed one
-      // may differ in case and would split favorites across two files.
       const accountName = session.accountName || typedAccountName;
 
       if (!refreshToken) {
@@ -227,7 +211,6 @@ export async function loginWithCredentials(client: SteamClient): Promise<LoginRe
   });
 }
 
-// Logs in using a previously saved refresh token
 export async function loginWithStoredCredentials(client: SteamClient): Promise<LoginResult> {
   const credentials = loadCredentials();
 
@@ -258,7 +241,6 @@ export async function loginWithStoredCredentials(client: SteamClient): Promise<L
   }
 }
 
-// Checks if stored login credentials exist
 export function hasStoredLogin(): boolean {
   return hasStoredCredentials();
 }

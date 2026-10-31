@@ -1,7 +1,4 @@
 #!/bin/sh
-# idle  -> headless daemon (default)
-# login -> interactive mode: log in, pick favorites, set up Telegram
-# *     -> passed straight to steamidled (e.g. --setup-telegram, --logout, --help)
 set -e
 case "${1:-idle}" in
   idle)

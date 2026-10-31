@@ -20,11 +20,9 @@ function ensureConfigDir(): void {
 
 function loadTelegramConfig(): TelegramConfig | null {
   if (!existsSync(CONFIG_PATH)) return null;
-  // Migrate older world-readable files written before 0600 was enforced.
   try {
     chmodSync(CONFIG_PATH, 0o600);
   } catch {
-    // Platforms without POSIX perms (or a perms error) — best effort only.
   }
   try {
     return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as TelegramConfig;
@@ -67,10 +65,6 @@ export class TelegramNotifier {
     return this.config !== null;
   }
 
-  // Fire-and-forget — never throws, never blocks the idler. The returned
-  // promise settles once the request is done (never rejects) so shutdown can
-  // give the final message a chance to land. A non-2xx reply (revoked bot
-  // token, wrong chat id) is logged so it does not fail silently.
   send(text: string): Promise<void> {
     if (!this.isConfigured()) return Promise.resolve();
     const { token, chatId } = this.config!;

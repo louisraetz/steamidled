@@ -2,31 +2,27 @@ import Table from 'cli-table3';
 import chalk from 'chalk';
 import type { IdlingGame } from '../types/index.js';
 
-// Table column widths include 1 char of padding on each side
 const NAME_COL_WIDTH = 38;
 const NAME_MAX_LENGTH = NAME_COL_WIDTH - 2;
 const EXEMPT_SUFFIX = ' ∞';
 
 export interface StatusOptions {
-  waitingReason?: string | null; // set while disconnected and auto-resuming
-  playingBlocked?: boolean; // another session on this account is playing
-  showKeyHints?: boolean; // false in headless mode, which reads no keys
+  waitingReason?: string | null;
+  playingBlocked?: boolean;
+  showKeyHints?: boolean;
 }
 
-// Displays the welcome banner
 export function showWelcome(version?: string): void {
   const suffix = version ? chalk.gray(` v${version}`) : '';
   console.log(chalk.cyan.bold('\n  Steam Game Time Idler') + suffix + '\n');
   console.log(chalk.gray('  Idle your Steam games to collect playtime\n'));
 }
 
-// Formats playtime minutes into a human-readable hours string
 function formatPlaytimeHours(minutes: number): string {
   const hours = Math.floor(minutes / 60);
   return `${hours.toLocaleString()}h`;
 }
 
-// Calculates and formats the time gained from idling
 function formatGainedTime(game: IdlingGame, isPaused: boolean): string {
   const now = new Date();
   let totalMs = game.accumulatedMs;
@@ -45,7 +41,6 @@ function formatGainedTime(game: IdlingGame, isPaused: boolean): string {
   return `+${minutes}m`;
 }
 
-// Calculates total playtime including time gained from idling
 function getTotalPlaytime(game: IdlingGame, isPaused: boolean): string {
   const now = new Date();
   let gainedMs = game.accumulatedMs;
@@ -60,8 +55,6 @@ function getTotalPlaytime(game: IdlingGame, isPaused: boolean): string {
   return formatPlaytimeHours(totalMinutes);
 }
 
-// Renders the Game cell: truncated name plus an ∞ marker if exempt. The marker
-// counts against the column width, otherwise cli-table3 truncates it away.
 function nameCell(game: IdlingGame, dim = false): string {
   const isExempt = game.nextPauseAtMs === null;
   const maxLength = isExempt ? NAME_MAX_LENGTH - EXEMPT_SUFFIX.length : NAME_MAX_LENGTH;
@@ -71,7 +64,6 @@ function nameCell(game: IdlingGame, dim = false): string {
   return isExempt ? `${base} ${chalk.cyan('∞')}` : base;
 }
 
-// Renders the Status cell for cooldown games, with a coarse remaining-time hint
 function formatCooldownLabel(pauseUntil: Date | null): string {
   if (!pauseUntil) return 'Cooldown';
   const ms = pauseUntil.getTime() - Date.now();
@@ -86,7 +78,6 @@ function formatCooldownLabel(pauseUntil: Date | null): string {
   return `Cooldown ${Math.floor(totalMinutes)}m`;
 }
 
-// Displays a formatted table showing the status of all idling games
 export function showIdlingStatus(
   idlingGames: IdlingGame[],
   pausedGames: IdlingGame[] = [],
@@ -95,8 +86,6 @@ export function showIdlingStatus(
 ): void {
   const isWaiting = !!options.waitingReason;
   const isBlocked = !!options.playingBlocked;
-  // While waiting or blocked no server playtime accrues, so the live delta is
-  // not added for idling rows either.
   const frozen = isWaiting || isBlocked;
 
   console.clear();
@@ -174,7 +163,6 @@ export function showIdlingStatus(
       suffix +
       '\n'
   );
-  // Key hints only make sense on a terminal that actually reads keys
   if (!process.stdout.isTTY || options.showKeyHints === false) return;
   if (isWaiting) {
     console.log(chalk.gray("  Press 'Q' to quit — edit disabled while waiting\n"));
@@ -183,22 +171,18 @@ export function showIdlingStatus(
   }
 }
 
-// Displays a success message after login
 export function showLoginSuccess(accountName: string): void {
   console.log(chalk.green(`\n  Logged in as ${chalk.bold(accountName)}\n`));
 }
 
-// Displays a login error message
 export function showLoginError(error: string): void {
   console.log(chalk.red(`\n  Login failed: ${error}\n`));
 }
 
-// Displays a goodbye message on exit
 export function showGoodbye(): void {
   console.log(chalk.cyan('\n  Goodbye! Happy idling!\n'));
 }
 
-// Displays an error message
 export function showError(message: string): void {
   console.log(chalk.red(`\n  Error: ${message}\n`));
 }

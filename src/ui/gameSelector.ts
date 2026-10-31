@@ -31,7 +31,6 @@ const FILTER_LABEL: Record<SourceFilter, string> = {
   shared: 'family shared',
 };
 
-// Interactive game selection with keyboard navigation and favorites support
 export async function selectGames(
   games: SteamGame[],
   accountName: string,
@@ -40,11 +39,8 @@ export async function selectGames(
   const favorites = loadFavorites(accountName);
   const initialExempt = loadExempt(accountName);
   const currentAppIds = new Set(currentSelection.map((g) => g.appid));
-  // Edit mode (a current selection exists) must reflect exactly what is idling;
-  // re-adding favorites would silently undo a deliberate deselection.
   const isEditMode = currentSelection.length > 0;
 
-  // Create selectable games list
   const selectableGames: SelectableGame[] = games.map((game) => ({
     appid: game.appid,
     name: game.name,
@@ -55,16 +51,12 @@ export async function selectGames(
     source: game.source,
   }));
 
-  // Sort: favorites first (alphabetically), then non-favorites (alphabetically)
   selectableGames.sort((a, b) => {
     if (a.isFavorite && !b.isFavorite) return -1;
     if (!a.isFavorite && b.isFavorite) return 1;
     return a.name.localeCompare(b.name);
   });
 
-  // The preselection (current selection ∪ favorites) can exceed the cap when a
-  // favorites file was hand-edited or predates the limit; keep the first 32 so
-  // Enter never trips the gamesPlayed cap.
   let preselected = 0;
   for (const game of selectableGames) {
     if (!game.selected) continue;
@@ -112,7 +104,6 @@ export async function selectGames(
 
       console.log(chalk.cyan.bold('\n  Select Games to Idle\n'));
 
-      // Count selections + source breakdown
       const selectedCount = selectableGames.filter((g) => g.selected).length;
       const counts = sourceCounts();
       const exemptGame = selectableGames.find((g) => g.isExempt);
@@ -143,7 +134,6 @@ export async function selectGames(
 
       const favoritesEndIndex = favoriteCount;
 
-      // Render favorites header if there are favorites and we're showing some
       if (favoriteCount > 0 && scrollOffset < favoritesEndIndex) {
         console.log(chalk.yellow.bold('  ★ FAVORITES\n'));
       }
@@ -179,13 +169,11 @@ export async function selectGames(
         console.log(chalk.gray('  No games match the current filter.'));
       }
 
-      // Scroll indicator
       if (filteredGames.length > pageSize) {
         const scrollInfo = `  ${visibleStart + 1}-${visibleEnd} of ${filteredGames.length}`;
         console.log(chalk.gray(`\n${scrollInfo}`));
       }
 
-      // Instructions
       console.log('');
       if (isSearchMode) {
         console.log(chalk.gray('  Type to filter | Backspace: delete | Esc: cancel | Enter: confirm'));
@@ -206,8 +194,6 @@ export async function selectGames(
       const allGames = getVisibleGames();
       hint = '';
 
-      // Hand the abort back to the caller so it can log off cleanly instead of
-      // exiting mid-session.
       if (key.ctrl && key.name === 'c') {
         cleanup();
         resolve({ selectedGames: [], exemptAppId: currentExempt, aborted: true });
@@ -295,7 +281,6 @@ export async function selectGames(
           render();
           return;
         }
-        // Edit mode: leave the selection exactly as it is idling now
         if (isEditMode) {
           cleanup();
           resolve({ selectedGames: currentSelection, exemptAppId: currentExempt });
@@ -329,7 +314,6 @@ export async function selectGames(
           }
           game.isFavorite = !game.isFavorite;
 
-          // Update favorites in storage
           const newFavorites = selectableGames
             .filter((g) => g.isFavorite)
             .map((g) => g.appid);
@@ -448,7 +432,6 @@ export async function selectGames(
   });
 }
 
-// Formats playtime minutes into a human-readable string
 function formatPlaytime(minutes: number): string {
   if (minutes === 0) {
     return 'never played';

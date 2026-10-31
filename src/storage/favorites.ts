@@ -10,19 +10,16 @@ interface FavoritesData {
   exemptAppId?: number | null;
 }
 
-// Constructs the path to an account-specific favorites JSON file
 function getFavoritesPath(accountName: string): string {
   return join(CONFIG_DIR, `favorites-${accountName}.json`);
 }
 
-// Ensures the config directory exists, creating it if necessary
 function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
 }
 
-// Reads the favorites file with defaults so writes can preserve sibling fields
 function readData(accountName: string): FavoritesData {
   const filePath = getFavoritesPath(accountName);
   if (!existsSync(filePath)) {
@@ -39,8 +36,6 @@ function readData(accountName: string): FavoritesData {
   }
 }
 
-// Writes the favorites file. A read-only config dir returns false instead of
-// throwing, so a keypress in the selector can never take the idler down.
 function writeData(accountName: string, data: FavoritesData): boolean {
   const filePath = getFavoritesPath(accountName);
   try {
@@ -53,24 +48,20 @@ function writeData(accountName: string, data: FavoritesData): boolean {
   }
 }
 
-// Saves the list of favorite game IDs to a JSON file; false if it could not be written
 export function saveFavorites(accountName: string, favorites: number[]): boolean {
   const data = readData(accountName);
   data.favorites = favorites;
   return writeData(accountName, data);
 }
 
-// Loads favorite game IDs from the JSON file, returning empty array if not found
 export function loadFavorites(accountName: string): number[] {
   return readData(accountName).favorites;
 }
 
-// Loads the exempt appid (game excluded from the randomizer), or null if none
 export function loadExempt(accountName: string): number | null {
   return readData(accountName).exemptAppId ?? null;
 }
 
-// Saves the exempt appid (or null to clear); false if it could not be written
 export function saveExempt(accountName: string, exemptAppId: number | null): boolean {
   const data = readData(accountName);
   data.exemptAppId = exemptAppId;

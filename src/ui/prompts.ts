@@ -1,7 +1,6 @@
 import { select } from '@inquirer/prompts';
 import type { AuthMethod } from '../types/index.js';
 
-// Displays authentication method selection prompt
 export async function promptAuthMethod(hasStored: boolean): Promise<AuthMethod | 'stored'> {
   const choices: Array<{ name: string; value: AuthMethod | 'stored'; description: string }> = [];
 

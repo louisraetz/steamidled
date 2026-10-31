@@ -10,9 +10,6 @@ declare module 'qrcode-terminal' {
 declare module 'steam-user' {
   import { EventEmitter } from 'events';
 
-  // Minimal local shape of the `steamid` package's SteamID (not a direct
-  // dependency, so its types do not resolve here; an unresolved import would
-  // silently become `any` under skipLibCheck).
   interface SteamID {
     accountid: number;
     type: number;
@@ -98,21 +95,11 @@ declare module 'steam-user' {
     licenses?: License[];
     picsCache: PicsCache;
     playingState?: { blocked: boolean; appid: number };
-    // Private steam-user flag (components/09-logon.js): true from logOn() until
-    // a logon response or a cleaned-up connection close. logOn() throws
-    // uncatchably while it is set, and some internal retry loops hold it
-    // without ever emitting an event, so the app has to read it.
     _connecting?: boolean;
-    // Private steam-user logon details reused by its own reconnects; a renewed
-    // refresh token must be written here or those reconnects use the old one.
     _logOnDetails?: { access_token?: string };
-    // Private factory for a steam-session LoginSession that talks over the CM
-    // connection. Steam only renews SteamClient refresh tokens over the CM; the
-    // Web API answers AccessDenied.
     _getLoginSession?(): import('steam-session').LoginSession;
 
     static EPersonaState: typeof EPersonaState;
-    // Bi-directional enum; we use the numeric→name direction for error labels.
     static EResult: Record<number, string>;
 
     constructor(options?: SteamUserOptions);

@@ -1,9 +1,5 @@
 import type { IdlingGame } from '../types/index.js';
 
-// Builds the daily Telegram report. Pure formatter — no side effects. `date`
-// only labels the report (the day that ended); all arithmetic uses `nowMs`.
-// isFrozen is true while idling games accrue nothing (waiting to resume, or
-// blocked by another session), so the live delta must not be added.
 export function formatDailyReport(
   idling: IdlingGame[],
   paused: IdlingGame[],
@@ -14,7 +10,7 @@ export function formatDailyReport(
   nowMs = Date.now()
 ): string {
   const now = nowMs;
-  const dateStr = date.toLocaleDateString('en-CA'); // YYYY-MM-DD
+  const dateStr = date.toLocaleDateString('en-CA');
   const lines: string[] = [];
   lines.push(`📊 Daily idling report — ${dateStr}`);
 

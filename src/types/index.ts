@@ -18,7 +18,7 @@ export interface LoginResult {
   success: boolean;
   accountName?: string;
   error?: string;
-  eresult?: number; // Steam EResult of a failed logon, when one was attached
+  eresult?: number;
 }
 
 export type AuthMethod = 'qr' | 'credentials';
@@ -31,15 +31,15 @@ export interface GameSelection {
 export interface IdlingGame {
   appid: number;
   name: string;
-  initialPlaytime: number;  // playtime_forever from Steam (in minutes)
-  startTime: Date;          // when this game started idling
-  accumulatedMs: number;    // accumulated idle time (for pause/resume)
-  nextPauseAtMs: number | null;  // accumulatedMs threshold to enter cooldown; null = exempt
-  pauseUntil: Date | null;       // when set, game is in randomizer cooldown
+  initialPlaytime: number;
+  startTime: Date;
+  accumulatedMs: number;
+  nextPauseAtMs: number | null;
+  pauseUntil: Date | null;
 }
 
 export interface GameSelectorResult {
   selectedGames: GameSelection[];
   exemptAppId: number | null;
-  aborted?: boolean; // true when the user pressed Ctrl+C inside the selector
+  aborted?: boolean;
 }
