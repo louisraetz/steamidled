@@ -1,0 +1,2 @@
+export const TELEGRAM_POLL_MS = 3000;
+export const TELEGRAM_WAIT_LIMIT_MS = 120_000;
