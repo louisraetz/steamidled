@@ -20,10 +20,11 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 
 - **📱 QR Code Login** — Scan with Steam mobile app
 - **🔐 Traditional Login** — Username/password with Steam Guard (for the old school folks)
+- **🌐 Web GUI** — Log in, pick games, start and stop, and watch live progress and logs from your browser. Great for servers and Docker
 - **🎯 Idle up to 32 games** — Because Steam said that's the limit and who are we to argue
 - **🎲 Smart cooldowns** — Games cycle between random idle and cooldown phases so playtime totals naturally diverge instead of looking suspiciously identical
 - **♾️ Exempt one game** — Pick a favorite that ignores cooldowns and idles forever
-- **🩹 Auto-recovery** — Survives connection drops, Steam outages, and session takeovers. Pings Telegram once and reconnects on its own with exponential backoff. Gives up only on unrecoverable errors (expired token, ban, protocol mismatch) or after 30 failed reconnects
+- **🩹 Auto-recovery** — Survives connection drops, Steam outages, and session takeovers. Pings Telegram once and reconnects on its own with exponential backoff. Gives up only on unrecoverable errors (expired token, ban, protocol mismatch) or after 30 failed reconnects. `--web` never gives up and asks you to sign in again in the browser
 - **🔑 Token renewal** — Refresh tokens expire after a few months; the daemon renews and saves them on its own so it keeps running
 - **📲 Telegram notifications** — Optional bot pings on stop/resume + daily midnight stats
 - **🔍 Search & filter** — Type `/` to search by name, `T` to cycle owned / free / family-shared
@@ -46,6 +47,7 @@ npm install -g @louisraetz/steamidled
 ```bash
 steamidled                  # Interactive mode
 steamidled --headless       # Headless mode (auto-start favorites)
+steamidled --web            # Headless mode with a web GUI
 steamidled --setup-telegram # (Re)configure Telegram notifications
 steamidled --logout         # Forget the saved Steam login
 steamidled --help           # All options
@@ -67,7 +69,7 @@ Get pings when idling stops/resumes and a daily snapshot at local midnight.
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and grab its token.
 2. The first time you run `steamidled` interactively, it'll ask if you want to configure Telegram. Say yes, paste your token when prompted, send `/start` to your bot in Telegram, and press Enter.
-3. To (re)configure later — e.g. new bot, new chat — run: `steamidled --setup-telegram`.
+3. To (re)configure later — e.g. new bot, new chat — run: `steamidled --setup-telegram`, or use Settings in the web GUI.
 
 Token + chat id live in `~/.steam-idler/telegram.json`. Picking "no" the first time stores `{ "disabled": true }` so the prompt won't bother you again.
 
@@ -81,7 +83,31 @@ What you'll get:
 | 🔄 flush | Every 4h: a quick relog that makes Steam commit the playtime |
 | ⚠️ Zombie session | Steam stopped crediting playtime; the idler forces a reconnect |
 | 📊 Daily idling report | Local midnight: today's gain per game, cooldowns, exempt |
-| 🛑 Idling stopped | Quit, crash, unrecoverable Steam error, or a failed headless start |
+| 🛑 Idling stopped | Quit, crash, unrecoverable Steam error, a failed headless start, or Stop / Log out in the web GUI |
+
+## 🌐 Web GUI
+
+Rather click than type? `--web` runs the headless daemon plus a web GUI:
+
+```bash
+steamidled --web
+```
+
+Open http://127.0.0.1:4821. From there you can log in (QR or password + Steam Guard), pick games, star favorites, choose the exempt game, start and stop, set up Telegram, and watch progress and logs live. No interactive first run needed: without a saved login it simply waits for you in the browser.
+
+Your picks last until the daemon restarts. After that it idles your first 32 favorites again, or nothing until you pick something.
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `STEAMIDLED_WEB_PORT` | `4821` | Port of the GUI |
+| `STEAMIDLED_WEB_HOST` | `127.0.0.1` | Address to listen on. `0.0.0.0` opens it to your network |
+| `STEAMIDLED_WEB_ALLOWED_HOSTS` | | Comma-separated domains you reach the GUI by, e.g. `idle.example.com`. `localhost` and IP addresses always work |
+
+> ⚠️ The GUI has no login of its own. Whoever can open it controls your Steam session. Keep it on localhost or your LAN, or put it behind a reverse proxy with authentication.
+
+Behind nginx, add `proxy_set_header Host $host;` and `proxy_buffering off;` so actions work and live updates arrive instantly.
+
+Port already taken, for example by a second `steamidled --web`? It exits right away with code 2 and says so.
 
 ## ⌨️ Controls
 
@@ -174,27 +200,43 @@ sudo systemctl stop steamidled     # Take a break
 sudo systemctl restart steamidled  # Turn it off and on again
 ```
 
+### Prefer the web GUI?
+
+Use `ExecStart=/usr/bin/steamidled --web` instead and skip the interactive first run: you log in from the browser. The GUI only listens on the server's `127.0.0.1`, so open an SSH tunnel from your machine and browse to http://127.0.0.1:4821:
+
+```bash
+ssh -L 4821:127.0.0.1:4821 you@your-server
+```
+
 ## 🐳 Docker
 
-Prefer containers? The repo ships a `Dockerfile` and a `docker-compose.yml`. The image runs as the unprivileged `node` user and keeps everything in a named volume mounted at `/home/node/.steam-idler`.
+Prefer containers? The repo ships a `Dockerfile` and a `docker-compose.yml`. The image runs as the unprivileged `node` user, starts the [web GUI](#-web-gui) by default and keeps everything in a named volume mounted at `/home/node/.steam-idler`.
 
 ```bash
 git clone https://github.com/louisraetz/steamidled.git && cd steamidled
 
-# 1. One-off interactive run: log in (QR works in the terminal), star favorites, set up Telegram
-docker compose run --rm -it steamidled login
-
-# 2. Idle in the background
+# Start it, then open http://127.0.0.1:4821 and log in from the browser
 docker compose up -d
 
 # Later
 docker compose logs -f                                   # What's it thinking?
-docker compose run --rm -it steamidled --setup-telegram  # (Re)configure Telegram
 docker compose run --rm steamidled --logout              # Forget the saved login
 docker compose down                                      # Stop (clean logoff, Telegram ping)
 ```
 
+The GUI is published on `127.0.0.1` only. For a different host port, set `STEAMIDLED_WEB_PORT` in a `.env` file next to `docker-compose.yml` or in your shell (`STEAMIDLED_WEB_PORT=8080 docker compose up -d`), never under `environment:`. Inside the container the GUI always listens on 4821.
+
+Terminal person? `docker compose run --rm -it steamidled login` gives you the interactive mode (QR works in the terminal), and `command: idle` in `docker-compose.yml` runs the plain headless daemon without a GUI.
+
 Set `TZ` in `docker-compose.yml` to your timezone, otherwise the daily report arrives at UTC midnight. The restart policy is `on-failure:5` on purpose: Docker has no equivalent of systemd's `RestartPreventExitStatus`, so a config problem (exit 2) gives up after a few tries instead of logging on to Steam every few seconds forever, while transient failures keep restarting.
+
+### Coolify
+
+1. Create an application from this repo with the **Dockerfile** build pack.
+2. Set the exposed port to `4821` and leave the port mappings empty. Coolify's proxy routes your domain to the container.
+3. Add persistent storage at `/home/node/.steam-idler`, otherwise every redeploy logs you out.
+4. Set your domain and add `STEAMIDLED_WEB_ALLOWED_HOSTS=your.domain`. A plain "Host not allowed" page means this is missing.
+5. Turn on **HTTP Basic Authentication** under Configuration → General, or keep the domain reachable from your LAN only. The GUI has no login of its own.
 
 ## 📁 Where's my stuff?
 
@@ -209,7 +251,7 @@ Everything lives in `~/.steam-idler/` (inside Docker: the `steamidled-config` vo
 
 ## 📋 Requirements
 
-- Node.js 18+ (we're modern here)
+- Node.js 20+ (we're modern here)
 - A Steam account with games (shocking, I know)
 - Steam mobile app (optional, but makes login ✨fancy✨)
 
