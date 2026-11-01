@@ -1,44 +1,58 @@
 <p align="center">
-  <img src="assets/logo.svg" width="112" alt="steamidled logo" />
+  <img src="assets/logo.svg" width="96" alt="" />
 </p>
 
-# steamidled 🎮💤
-
-[![npm version](https://img.shields.io/npm/v/@louisraetz/steamidled)](https://www.npmjs.com/package/@louisraetz/steamidled)
-[![npm downloads](https://img.shields.io/npm/dm/@louisraetz/steamidled)](https://www.npmjs.com/package/@louisraetz/steamidled)
-
-Steam game idler CLI and daemon. Rack up playtime while you touch grass. Run up to 32 games simultaneously, collect trading cards, and finally look like you have no life (in a good way).
+<h1 align="center">steamidled</h1>
 
 <p align="center">
-  <img src="assets/cli-1.png" width="49%" />
-  <img src="assets/cli-2.png" width="49%" />
+  Idle up to 32 Steam games at once from your terminal, a server or a Docker container.<br />
+  Random idle and cooldown phases keep the hours looking human.
 </p>
 
-## ✨ Why does this exist?
+<p align="center">
+  <a href="https://www.npmjs.com/package/@louisraetz/steamidled"><img src="https://img.shields.io/npm/v/@louisraetz/steamidled" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@louisraetz/steamidled"><img src="https://img.shields.io/npm/dm/@louisraetz/steamidled" alt="npm downloads" /></a>
+  <img src="https://img.shields.io/node/v/@louisraetz/steamidled" alt="Node.js version" />
+  <a href="LICENSE"><img src="https://img.shields.io/npm/l/@louisraetz/steamidled" alt="MIT license" /></a>
+</p>
 
-This is a hobby project, born from a weekend of vibe coding and questionable life choices. I wanted more hours in games I'll never actually play, and here we are.
+<p align="center">
+  <img src="assets/demo-web.webp" alt="steamidled web GUI: two games are added in the picker, applied, and start collecting playtime" />
+</p>
 
-Built with love, caffeine, and Claude. No regrets. 🤖☕
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#web-gui">Web GUI</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#faq">FAQ</a>
+</p>
 
-## 🚀 Features
+## Features
 
-- **📱 QR Code Login** — Scan with Steam mobile app
-- **🔐 Traditional Login** — Username/password with Steam Guard (for the old school folks)
-- **🌐 Web GUI** — Log in, pick games, start and stop, and watch live progress and logs from your browser. Great for servers and Docker
-- **🎯 Idle up to 32 games** — Because Steam said that's the limit and who are we to argue
-- **🎲 Smart cooldowns** — Games cycle between random idle and cooldown phases so playtime totals naturally diverge instead of looking suspiciously identical
-- **♾️ Exempt one game** — Pick a favorite that ignores cooldowns and idles forever
-- **🩹 Auto-recovery** — Survives connection drops, Steam outages, and session takeovers. Pings Telegram once and reconnects on its own with exponential backoff. Gives up only on unrecoverable errors (expired token, ban, protocol mismatch) or after 30 failed reconnects. `--web` never gives up and asks you to sign in again in the browser
-- **🔑 Token renewal** — Refresh tokens expire after a few months; the daemon renews and saves them on its own so it keeps running
-- **📲 Telegram notifications** — Optional bot pings on stop/resume + daily midnight stats
-- **🔍 Search & filter** — Type `/` to search by name, `T` to cycle owned / free / family-shared
-- **👨‍👧 Family-shared library** — Idle games shared with you, tagged with a `↪` badge
-- **📊 Real-time tracking** — Watch numbers go up. Dopamine achieved.
-- **⭐ Favorites system** — Star your favorites so you can pretend you're organized
-- **⏸️ Auto-pause** — Play something on another device and idling freezes until you stop (Steam blocks the whole session, so the clocks stop too). Picks up again on its own
-- **💾 Persistent sessions** — Remembers your login so you don't have to
+- **32 games at once**, the most Steam allows per account.
+- **Hours that look human.** Every game alternates between its own random idle and cooldown phases, so a month of idling doesn't leave the same number on every game. Pick a Weekend, Daily or Grinder rhythm, or set your own ranges.
+- **Three ways to run it:** an interactive terminal UI, a headless daemon, or the daemon with a web GUI.
+- **QR code login** with the Steam mobile app, or username, password and Steam Guard. Only a refresh token is stored, and it renews itself.
+- **Runs unattended.** Reconnects after network drops, Steam outages and session takeovers, pauses while you play on another device and makes sure Steam actually records the hours.
+- **Telegram notifications** when idling stops or resumes, plus a daily report.
+- **Docker and Coolify ready:** unprivileged image, healthcheck, config in a volume.
+- Owned, free and family-shared games, with search and filters.
 
-## 📦 Installation
+## Quick start
+
+```bash
+npm install -g @louisraetz/steamidled
+steamidled
+```
+
+Choose **QR Code**, scan it with the Steam app, pick your games and press Enter. Rather use a browser? Run `steamidled --web` and open http://127.0.0.1:4821.
+
+Requires Node.js 20 or newer.
+
+## Installation
 
 ### npm
 
@@ -46,78 +60,167 @@ Built with love, caffeine, and Claude. No regrets. 🤖☕
 npm install -g @louisraetz/steamidled
 ```
 
-## 🎮 Usage
+### Docker Compose
+
+The repo ships a `Dockerfile` and a `docker-compose.yml`. The container runs the [web GUI](#web-gui) as the unprivileged `node` user and keeps everything in the `steamidled-config` volume.
 
 ```bash
-steamidled                  # Interactive mode
-steamidled --headless       # Headless mode (auto-start favorites)
-steamidled --web            # Headless mode with a web GUI
-steamidled --setup-telegram # (Re)configure Telegram notifications
-steamidled --logout         # Forget the saved Steam login
-steamidled --help           # All options
+git clone https://github.com/louisraetz/steamidled.git && cd steamidled
+docker compose up -d
+```
+
+Open http://127.0.0.1:4821 and log in from the browser.
+
+```bash
+docker compose logs -f                        # follow the logs
+docker compose run --rm steamidled --logout   # forget the saved login
+docker compose down                           # stop with a clean logoff
+```
+
+- The GUI is published on `127.0.0.1` only. For another host port, set `STEAMIDLED_WEB_PORT` in a `.env` file next to `docker-compose.yml` or in your shell (`STEAMIDLED_WEB_PORT=8080 docker compose up -d`), not under `environment:`. Inside the container the GUI always listens on 4821.
+- Set `TZ` in `docker-compose.yml` to your timezone, otherwise the daily report arrives at UTC midnight.
+- Prefer the terminal? `docker compose run --rm -it steamidled login` starts the interactive mode, and `command: idle` runs the headless daemon without a GUI.
+- The restart policy is `on-failure:5` on purpose. A configuration problem exits with code 2 and gives up after a few tries instead of logging on to Steam forever, while transient failures keep restarting.
+
+### Coolify
+
+1. Create an application from this repo with the **Dockerfile** build pack.
+2. Set the exposed port to `4821` and leave the port mappings empty.
+3. Add persistent storage at `/home/node/.steam-idler`, otherwise every redeploy logs you out.
+4. Set your domain. If the GUI answers "Host not allowed", add `STEAMIDLED_WEB_ALLOWED_HOSTS=your.domain`.
+5. Turn on **HTTP Basic Authentication** under Configuration → General, or keep the domain reachable from your LAN only. The GUI has no login of its own.
+
+<details>
+<summary>Build from source</summary>
+
+```bash
+git clone https://github.com/louisraetz/steamidled.git && cd steamidled
+pnpm install
+pnpm build
+node dist/index.js --help
+```
+
+</details>
+
+## Usage
+
+```bash
+steamidled                   # interactive terminal UI
+steamidled --headless        # daemon, idles your auto-start games
+steamidled --web             # daemon with the web GUI on port 4821
+steamidled --setup-telegram  # set up or change Telegram notifications
+steamidled --logout          # forget the saved Steam login
+steamidled --version         # print the version
+steamidled --help            # list all options
 ```
 
 ### Interactive mode
 
-1. **Pick your login method** — QR code is chef's kiss 👨‍🍳💋
-2. **Select your games** — Go wild, pick all of them, I won't judge
-3. **Watch the hours roll in** — This is what peak productivity looks like
+<p align="center">
+  <img src="assets/demo-cli.webp" alt="steamidled terminal UI: logging in with the saved login, selecting two more games and starting to idle" />
+</p>
+
+Log in, pick your games, press Enter. Your login and favorites are saved, so the next start takes two key presses.
+
+| Key | Game selection |
+|-----|----------------|
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | Move through the list |
+| `Space` | Select or deselect a game |
+| `F` | Mark as favorite. Favorites start automatically in headless mode |
+| `X` | Skip cooldowns for this game. One game at a time |
+| `T` | Cycle the filter: all, owned, free, family-shared |
+| `/` | Search by name, `Esc` clears |
+| `S` | Start all favorites |
+| `Enter` | Start idling |
+
+| Key | While idling |
+|-----|--------------|
+| `E` | Change the selection |
+| `Q` | Quit with a clean logoff |
+| `Ctrl+C` | Quit right away |
 
 ### Headless mode
 
-Automatically logs in and starts idling your favorited games (the first 32 if you starred more). Perfect for running as a service. Requires running interactively first to log in and set up favorites. A network blip or rate limit at startup keeps your saved login; only a genuinely expired or revoked token makes you log in again.
+`steamidled --headless` logs in with the saved login and idles your favorites, the first 32 if you marked more. Run the interactive mode once first to log in and choose favorites. A network blip or rate limit at startup keeps the saved login. Only an expired or revoked token asks you to log in again.
 
-### 📲 Telegram notifications (optional)
+### Running as a service
 
-Get pings when idling stops/resumes and a daily snapshot (local midnight unless you pick another hour).
+On Linux, run the headless mode under systemd. Find the binary with `which steamidled` and create `/etc/systemd/system/steamidled.service`:
 
-1. Create a bot via [@BotFather](https://t.me/BotFather) and grab its token.
-2. The first time you run `steamidled` interactively, it'll ask if you want to configure Telegram. Say yes, paste your token when prompted, send `/start` to your bot in Telegram, and press Enter.
-3. To (re)configure later — e.g. new bot, new chat — run: `steamidled --setup-telegram`, or use Settings in the web GUI.
+```ini
+[Unit]
+Description=steamidled
+After=network-online.target
+Wants=network-online.target
 
-Token + chat id live in `~/.steam-idler/telegram.json`. Picking "no" the first time stores `{ "disabled": true }` so the prompt won't bother you again.
+[Service]
+Type=simple
+User=YOUR_USERNAME
+ExecStart=/usr/bin/steamidled --headless
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=2
 
-Too chatty? Settings in the web GUI switches each kind below on or off, sends a test message and sends the daily report on demand. The choice is stored as `notify` in `telegram.json`, so the CLI respects it too. Messages about idling stopping for good always come through.
-
-What you'll get:
-
-| Message | When |
-|---------|------|
-| ▶️ Idling started | On start, with the game count and the exempt game |
-| ⏸️ Idling paused | A disconnect or takeover that lasts longer than 30s (short blips stay silent) |
-| ▶️ Idling resumed after … | Once the reconnect has held for 90s |
-| 🔄 flush | Every 4h (configurable): a quick relog that makes Steam commit the playtime |
-| ⚠️ Zombie session | Steam stopped crediting playtime; the idler forces a reconnect |
-| 📊 Daily idling report | Local midnight (configurable): today's gain per game, cooldowns, exempt |
-| 🛑 Idling stopped | Quit, crash, unrecoverable Steam error, a failed headless start, or Stop / Log out in the web GUI |
-
-## 🌐 Web GUI
-
-Rather click than type? `--web` runs the headless daemon plus a web GUI:
-
-```bash
-steamidled --web
+[Install]
+WantedBy=multi-user.target
 ```
 
-Open http://127.0.0.1:4821. From there you can log in (QR or password + Steam Guard), pick games and apply them in one go, mark auto-start games (the CLI's ⭐ favorites), give one game no cooldown (the CLI's ∞ exempt), set up Telegram, and watch progress and logs live. The ⋯ menu on each game sends it into a cooldown now, ends a cooldown early or moves the next one. No interactive first run needed: without a saved login it simply waits for you in the browser.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now steamidled
+journalctl -u steamidled -f
+```
 
-Your picks survive restarts, cooldown progress included. Only the very first start and a sign-in after logging out idle your first 32 auto-start games.
+Exit code 2 means a restart can't fix it: no saved login, no favorites, an expired or revoked token, a banned account or a protocol mismatch. Exit code 1 is transient, so systemd restarts it.
 
-| Variable | Default | What it does |
-|----------|---------|--------------|
+To manage the service from a browser instead, use `ExecStart=/usr/bin/steamidled --web` and skip the interactive first run. The GUI listens on the server's `127.0.0.1`, so reach it through an SSH tunnel:
+
+```bash
+ssh -L 4821:127.0.0.1:4821 you@your-server
+```
+
+## Web GUI
+
+`steamidled --web` runs the headless daemon plus a web GUI at http://127.0.0.1:4821. From there you can:
+
+- log in with a QR code or with password and Steam Guard, no interactive first run needed
+- pick games and apply them in one go, and mark auto-start games
+- give one game no cooldown, send a game into a cooldown now, end one early or move the next one
+- choose a schedule profile, your Steam status, the commit interval and the daily report hour
+- set up Telegram and pick which messages you get
+- follow progress and logs live
+
+Your selection and each game's cooldown progress survive restarts. Only the very first start and a sign-in after logging out begin with your first 32 auto-start games.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `STEAMIDLED_WEB_PORT` | `4821` | Port of the GUI |
 | `STEAMIDLED_WEB_HOST` | `127.0.0.1` | Address to listen on. `0.0.0.0` opens it to your network |
-| `STEAMIDLED_WEB_ALLOWED_HOSTS` | | Comma-separated domains you reach the GUI by, e.g. `idle.example.com`. `localhost` and IP addresses always work |
+| `STEAMIDLED_WEB_ALLOWED_HOSTS` | | Comma-separated domains you open the GUI on, for example `idle.example.com`. `localhost` and IP addresses always work |
 
-> ⚠️ The GUI has no login of its own. Whoever can open it controls your Steam session. Keep it on localhost or your LAN, or put it behind a reverse proxy with authentication.
+> [!WARNING]
+> The GUI has no login of its own. Whoever can open it controls your Steam session. Keep it on localhost or your LAN, or put it behind a reverse proxy with authentication.
 
-Behind nginx, add `proxy_set_header Host $host;` and `proxy_buffering off;` so actions work and live updates arrive instantly.
+Behind nginx, add `proxy_set_header Host $host;` and `proxy_buffering off;` so actions work and live updates arrive right away. If the port is taken, for example by a second `steamidled --web`, it exits with code 2 and says so.
 
-Port already taken, for example by a second `steamidled --web`? It exits right away with code 2 and says so.
+## Configuration
 
-### ⚙️ Settings
+### Schedule profiles
 
-The Settings page in the web GUI picks the [schedule profile](#-how-the-randomizer-works) (or turns cooldowns off), how often playtime gets committed, the watchdog, your Steam status, the daily report hour and the Telegram messages. It saves to `~/.steam-idler/settings.json`, and interactive and `--headless` mode read the same file at startup. Every field is optional, missing ones use these defaults:
+Idling every game nonstop for a month gives them all the same hour count. Instead, every game runs on its own schedule: a random idle phase, then a random cooldown where it drops out, then a new idle phase. Pick the rhythm in the web GUI under Settings → Schedule.
+
+| Profile | Idle phase | Cooldown | Collects about |
+|---------|------------|----------|----------------|
+| Weekend | 1–3 days | 4–6 days | 30% of the time |
+| Daily (default) | 3–10 days | 1–3 days | 75% of the time |
+| Grinder | 20–60 days | 6–24 hours | 98% of the time |
+| Custom | your ranges | your ranges | |
+
+Switching profiles gives every running game a new schedule right away. One game can skip cooldowns entirely (`X` in the terminal, ∞ in the web GUI), and you can turn cooldowns off to idle everything nonstop.
+
+### settings.json
+
+The web GUI saves its settings to `~/.steam-idler/settings.json`. Interactive and headless mode read the same file at startup. Every field is optional. These are the defaults:
 
 ```json
 {
@@ -132,181 +235,92 @@ The Settings page in the web GUI picks the [schedule profile](#-how-the-randomiz
 }
 ```
 
-`profile` is `weekend`, `daily`, `grinder` or `custom`. Only `custom` reads `idleMinHours`, `idleMaxHours`, `cooldownMinHours` and `cooldownMaxHours`, all four in hours. A file with these ranges but no `profile` counts as `custom`, so an older settings file keeps its rhythm, and missing ranges use the old defaults of 168, 720, 100 and 200 hours. `flushIntervalHours` is one of 1, 2, 4, 6, 8 or 12, `personaState` is `online`, `away` or `offline`. A broken value falls back to its default with a warning in the log.
+| Field | Values |
+|-------|--------|
+| `schedule.enabled` | `false` idles nonstop without cooldowns |
+| `schedule.profile` | `weekend`, `daily`, `grinder` or `custom` |
+| `schedule.idleMinHours`, `idleMaxHours`, `cooldownMinHours`, `cooldownMaxHours` | Ranges in hours, only read for `custom` |
+| `flushIntervalHours` | How often playtime gets committed: `1`, `2`, `4`, `6`, `8` or `12` |
+| `watchdog` | Checks that Steam keeps counting and reconnects if it stops |
+| `personaState` | Your Steam status while idling: `online`, `away` or `offline` |
+| `dailyReportHour` | Hour of the Telegram daily report, `0` to `23` |
 
-The library updates itself. When Steam reports a new license, like a purchase, a gift or a free game, the web GUI reloads your games about 15 seconds later, at most once every 5 minutes. The Refresh button stays for when you don't want to wait.
+A broken value falls back to its default with a warning in the log. A file from an older version with ranges but no `profile` counts as `custom` and keeps its rhythm.
 
-## ⌨️ Controls
+### Files
 
-### Game Selection
-
-| Key | What it does |
-|-----|--------------|
-| `↑` `↓` | Navigate (you got this) |
-| `Space` | Toggle game on/off |
-| `F` | Favorite a game ⭐ |
-| `X` | Mark as exempt from the randomizer ♾️ |
-| `T` | Cycle source filter (all / owned / free / family-shared) |
-| `/` | Search by name (case-insensitive, Esc to clear) |
-| `PgUp` `PgDn` `Home` `End` | Jump through long libraries |
-| `S` | Start all favorites |
-| `Enter` | Let's gooo 🚀 (does nothing while nothing is selected) |
-| `Esc` | In edit mode: back to idling, selection unchanged |
-
-### While Idling
-
-| Key | What it does |
-|-----|--------------|
-| `E` | Edit your selection (changed your mind?) |
-| `Q` | Quit gracefully (like a gentleman) |
-| `Ctrl+C` | Rage quit |
-
-## 🎲 How the randomizer works
-
-Idling all your games full-throttle for a month gives them suspiciously identical hour counts. To avoid that, every game runs on its own private schedule:
-
-- **Idle phase** — a random stretch of active idling
-- **Cooldown phase** — a random break where the game drops out of the rotation
-- After cooldown, the game rejoins the idle pool with a fresh idle-phase target and the cycle repeats
-
-How long each phase lasts comes from the schedule profile:
-
-| Profile | Idle phase | Cooldown | Collects about |
-|---------|------------|----------|----------------|
-| Weekend | 1–3 days | 4–6 days | 30% of the time |
-| Daily (default) | 3–10 days | 1–3 days | 75% of the time |
-| Grinder | 20–60 days | 6–24 hours | 98% of the time |
-| Custom | your own ranges | your own ranges | |
-
-Earlier versions always used 7–30 days of idling and 100–200 hours of cooldown. A settings file from back then keeps that rhythm as Custom. On a fresh setup, pick Custom in [Settings](#️-settings) and set those ranges, or switch cooldowns off to idle nonstop. Switching to a profile gives every running game a new schedule right away. Custom starts from your last custom ranges, or from the profile you had, and applies from each game's next phase.
-
-Run for a month and your library ends up with naturally varied playtime instead of one tell-tale plateau.
-
-Want one game that just idles forever? Hit `X` on it in the selector — it gets marked with `∞`, skips cooldowns entirely, and idles for as long as the process is running. Only one game can be exempt at a time.
-
-## 🐧 Running 24/7 on Linux
-
-Want to idle games while you sleep? Same. Run it as a systemd service with `--headless` mode.
-
-### Prerequisites
-
-1. Run the tool interactively once to log in and set up favorites
-2. Find where it lives: `which steamidled`
-
-### Create the Service
-
-```bash
-sudo nano /etc/systemd/system/steamidled.service
-```
-
-```ini
-[Unit]
-Description=steamidled
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=YOUR_USERNAME
-ExecStart=/usr/bin/steamidled --headless
-Restart=on-failure
-RestartSec=10
-# exit 2 = nothing a restart can fix: no saved login, no favorites, expired or
-# revoked token, banned account, protocol mismatch. exit 1 = transient, restart.
-RestartPreventExitStatus=2
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Replace `YOUR_USERNAME` with your username.
-
-### Fire it up
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable steamidled
-sudo systemctl start steamidled
-```
-
-### Useful commands
-
-```bash
-sudo systemctl status steamidled   # Is it alive?
-journalctl -u steamidled -f        # What's it thinking?
-sudo systemctl stop steamidled     # Take a break
-sudo systemctl restart steamidled  # Turn it off and on again
-```
-
-### Prefer the web GUI?
-
-Use `ExecStart=/usr/bin/steamidled --web` instead and skip the interactive first run: you log in from the browser. The GUI only listens on the server's `127.0.0.1`, so open an SSH tunnel from your machine and browse to http://127.0.0.1:4821:
-
-```bash
-ssh -L 4821:127.0.0.1:4821 you@your-server
-```
-
-## 🐳 Docker
-
-Prefer containers? The repo ships a `Dockerfile` and a `docker-compose.yml`. The image runs as the unprivileged `node` user, starts the [web GUI](#-web-gui) by default and keeps everything in a named volume mounted at `/home/node/.steam-idler`.
-
-```bash
-git clone https://github.com/louisraetz/steamidled.git && cd steamidled
-
-# Start it, then open http://127.0.0.1:4821 and log in from the browser
-docker compose up -d
-
-# Later
-docker compose logs -f                                   # What's it thinking?
-docker compose run --rm steamidled --logout              # Forget the saved login
-docker compose down                                      # Stop (clean logoff, Telegram ping)
-```
-
-The GUI is published on `127.0.0.1` only. For a different host port, set `STEAMIDLED_WEB_PORT` in a `.env` file next to `docker-compose.yml` or in your shell (`STEAMIDLED_WEB_PORT=8080 docker compose up -d`), never under `environment:`. Inside the container the GUI always listens on 4821.
-
-Terminal person? `docker compose run --rm -it steamidled login` gives you the interactive mode (QR works in the terminal), and `command: idle` in `docker-compose.yml` runs the plain headless daemon without a GUI.
-
-Set `TZ` in `docker-compose.yml` to your timezone, otherwise the daily report arrives at UTC midnight. The restart policy is `on-failure:5` on purpose: Docker has no equivalent of systemd's `RestartPreventExitStatus`, so a config problem (exit 2) gives up after a few tries instead of logging on to Steam every few seconds forever, while transient failures keep restarting.
-
-### Coolify
-
-1. Create an application from this repo with the **Dockerfile** build pack.
-2. Set the exposed port to `4821` and leave the port mappings empty. Coolify's proxy routes your domain to the container.
-3. Add persistent storage at `/home/node/.steam-idler`, otherwise every redeploy logs you out.
-4. Set your domain and add `STEAMIDLED_WEB_ALLOWED_HOSTS=your.domain`. A plain "Host not allowed" page means this is missing.
-5. Turn on **HTTP Basic Authentication** under Configuration → General, or keep the domain reachable from your LAN only. The GUI has no login of its own.
-
-## 📁 Where's my stuff?
-
-Everything lives in `~/.steam-idler/` (inside Docker: the `steamidled-config` volume):
+Everything lives in `~/.steam-idler/`, inside Docker in the `steamidled-config` volume:
 
 ```
 ~/.steam-idler/
-├── credentials.json          # Your login token (keep it secret 🤫)
-├── favorites-{username}.json # Your favorites + exempt game pick
-├── session-{username}.json   # Web GUI: the games idling right now, restored after a restart
-├── settings.json             # Optional schedule profile, flush interval, report hour, ...
-└── telegram.json             # Optional Telegram bot token + chat id
+├── credentials.json           # refresh token, readable only by you
+├── favorites-{username}.json  # favorites and the game without cooldown
+├── session-{username}.json    # web GUI: current selection, restored after a restart
+├── settings.json              # schedule, commit interval, status, report hour
+└── telegram.json              # bot token, chat id and message choices
 ```
 
-## 📋 Requirements
+### Telegram notifications
 
-- Node.js 20+ (we're modern here)
-- A Steam account with games (shocking, I know)
-- Steam mobile app (optional, but makes login ✨fancy✨)
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. Run `steamidled --setup-telegram`, or open Settings → Telegram in the web GUI. Paste the token and send `/start` to your bot.
 
-## 🤝 Contributing
+The first interactive run offers this setup once. Answering no stores `{ "disabled": true }` so it doesn't ask again.
 
-Found a bug? Have an idea? PRs welcome! This is a hobby project so I might be slow, but I appreciate you. 💙
+| Message | When |
+|---------|------|
+| ▶️ Idling started | On start, with the game count and the game without cooldown |
+| ⏸️ Idling paused | A disconnect or takeover that lasts longer than 30 seconds |
+| ▶️ Idling resumed | Once the reconnect has held for 90 seconds |
+| 🔄 Flush | Each scheduled relog that commits playtime |
+| ⚠️ Zombie session | Steam stopped counting and steamidled forces a reconnect |
+| 📊 Daily report | Today's gain per game, cooldowns and the game without cooldown |
+| 🛑 Idling stopped | Quit, crash, an unrecoverable Steam error, or Stop and Log out in the web GUI |
 
-## ⚠️ Disclaimer
+Each kind can be switched off in the web GUI, which also sends test messages and the daily report on demand. Messages about idling stopping for good always come through.
 
-This is just a fun side project. Use responsibly. I'm not responsible if Valve gets mad at you or whatever. Probably don't idle 10,000 hours in a game you've never launched. Or do. I'm not your mom.
+## How it works
 
-## 📄 License
+**Idling.** steamidled logs in with [steam-user](https://github.com/DoctorMcKay/node-steam-user) and tells Steam which games you are playing. No game is downloaded or started. Steam counts playtime for every announced game, up to 32 at a time.
 
-MIT — Do whatever you want with it ✌️
+**Committing playtime.** Steam writes playtime in batches, and a session that ends uncleanly can lose what wasn't written yet. steamidled therefore reconnects on a schedule, every 4 hours by default, which makes Steam record the hours so far. The watchdog checks that the total on Steam keeps growing and reconnects if it doesn't. In the web GUI, Settings → Steam commits on demand.
 
----
+**Staying online.** After a network drop, an outage or a login on another device, steamidled waits and reconnects with increasing delays. Interactive and headless mode give up only on unrecoverable errors or after 30 failed attempts. The web GUI never gives up and asks you to sign in again if the token is gone. Refresh tokens expire after a few months, so steamidled renews and saves them on its own.
 
-*Made with mass vibe coding energy* 🌊✨
+**Playing yourself.** Steam allows one playing session per account. Start a game on another device and idling pauses until you stop, then picks up again.
+
+**New games.** When Steam reports a new license, like a purchase, a gift or a free game, the library reloads by itself within about 15 seconds.
+
+## FAQ
+
+**Can my account get banned?**
+It can't be ruled out. Read the [disclaimer](#disclaimer) before you use it.
+
+**Can I play while steamidled runs?**
+Yes. Start a game anywhere and idling pauses, then continues when you quit.
+
+**Why doesn't my profile show the new hours yet?**
+Steam updates totals in batches. They show up after the next commit, every 4 hours by default, or right away with "Commit playtime now" in the web GUI.
+
+**Is my password stored?**
+No. After login only a refresh token is kept in `~/.steam-idler/credentials.json`, readable only by your user. `steamidled --logout` deletes it.
+
+**Headless mode says "No favorites configured".**
+Run `steamidled` once, mark games with `F`, then start headless again. Or use `--web` and pick games in the browser.
+
+**The browser shows "Host not allowed".**
+You opened the GUI through a domain. Add it to `STEAMIDLED_WEB_ALLOWED_HOSTS`.
+
+## Disclaimer
+
+steamidled is not affiliated with, endorsed by or sponsored by Valve Corporation or Steam.
+
+The [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/) forbids using automation to fake gameplay statistics such as playtime (section 4), and Valve may restrict or terminate accounts that break it. steamidled never runs a game, so VAC, which scans game processes, doesn't apply, but Valve can still act on your account. You use steamidled at your own risk.
+
+## Contributing
+
+Bug reports and pull requests are welcome. Please open an issue first for larger changes.
+
+## License
+
+[MIT](LICENSE)
