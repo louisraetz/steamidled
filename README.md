@@ -117,16 +117,13 @@ Port already taken, for example by a second `steamidled --web`? It exits right a
 
 ### ⚙️ Settings
 
-The Settings page in the web GUI controls the cooldown ranges (or turns cooldowns off), how often playtime gets committed, the watchdog, your Steam status, the daily report hour and the Telegram messages. It saves to `~/.steam-idler/settings.json`, and interactive and `--headless` mode read the same file at startup. Every field is optional, missing ones use these defaults:
+The Settings page in the web GUI picks the [schedule profile](#-how-the-randomizer-works) (or turns cooldowns off), how often playtime gets committed, the watchdog, your Steam status, the daily report hour and the Telegram messages. It saves to `~/.steam-idler/settings.json`, and interactive and `--headless` mode read the same file at startup. Every field is optional, missing ones use these defaults:
 
 ```json
 {
   "schedule": {
     "enabled": true,
-    "idleMinHours": 168,
-    "idleMaxHours": 720,
-    "cooldownMinHours": 100,
-    "cooldownMaxHours": 200
+    "profile": "daily"
   },
   "flushIntervalHours": 4,
   "watchdog": true,
@@ -135,7 +132,9 @@ The Settings page in the web GUI controls the cooldown ranges (or turns cooldown
 }
 ```
 
-`flushIntervalHours` is one of 1, 2, 4, 6, 8 or 12, `personaState` is `online`, `away` or `offline`. A broken value falls back to its default with a warning in the log.
+`profile` is `weekend`, `daily`, `grinder` or `custom`. Only `custom` reads `idleMinHours`, `idleMaxHours`, `cooldownMinHours` and `cooldownMaxHours`, all four in hours. A file with these ranges but no `profile` counts as `custom`, so an older settings file keeps its rhythm, and missing ranges use the old defaults of 168, 720, 100 and 200 hours. `flushIntervalHours` is one of 1, 2, 4, 6, 8 or 12, `personaState` is `online`, `away` or `offline`. A broken value falls back to its default with a warning in the log.
+
+The library updates itself. When Steam reports a new license, like a purchase, a gift or a free game, the web GUI reloads your games about 15 seconds later, at most once every 5 minutes. The Refresh button stays for when you don't want to wait.
 
 ## ⌨️ Controls
 
@@ -166,11 +165,20 @@ The Settings page in the web GUI controls the cooldown ranges (or turns cooldown
 
 Idling all your games full-throttle for a month gives them suspiciously identical hour counts. To avoid that, every game runs on its own private schedule:
 
-- **Idle phase** — random 7–30 days of active idling
-- **Cooldown phase** — random 100–200 hours where the game drops out of the rotation
+- **Idle phase** — a random stretch of active idling
+- **Cooldown phase** — a random break where the game drops out of the rotation
 - After cooldown, the game rejoins the idle pool with a fresh idle-phase target and the cycle repeats
 
-Both ranges are yours to change in [Settings](#️-settings), or switch cooldowns off to idle nonstop.
+How long each phase lasts comes from the schedule profile:
+
+| Profile | Idle phase | Cooldown | Collects about |
+|---------|------------|----------|----------------|
+| Weekend | 1–3 days | 4–6 days | 30% of the time |
+| Daily (default) | 3–10 days | 1–3 days | 75% of the time |
+| Grinder | 20–60 days | 6–24 hours | 98% of the time |
+| Custom | your own ranges | your own ranges | |
+
+Earlier versions always used 7–30 days of idling and 100–200 hours of cooldown. A settings file from back then keeps that rhythm as Custom. On a fresh setup, pick Custom in [Settings](#️-settings) and set those ranges, or switch cooldowns off to idle nonstop. Switching to a profile gives every running game a new schedule right away. Custom starts from your last custom ranges, or from the profile you had, and applies from each game's next phase.
 
 Run for a month and your library ends up with naturally varied playtime instead of one tell-tale plateau.
 
@@ -276,7 +284,7 @@ Everything lives in `~/.steam-idler/` (inside Docker: the `steamidled-config` vo
 ~/.steam-idler/
 ├── credentials.json          # Your login token (keep it secret 🤫)
 ├── favorites-{username}.json # Your favorites + exempt game pick
-├── settings.json             # Optional cooldown ranges, flush interval, report hour, ...
+├── settings.json             # Optional schedule profile, flush interval, report hour, ...
 └── telegram.json             # Optional Telegram bot token + chat id
 ```
 
