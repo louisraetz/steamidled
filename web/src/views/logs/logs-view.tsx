@@ -9,7 +9,7 @@ export function LogsView() {
   return (
     <Page layout="screen">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 pb-4">
-        <h1 className="text-xl font-semibold">Logs</h1>
+        <h1 className="text-2xl font-semibold">Logs</h1>
         <div className="flex flex-wrap items-center gap-2">
           <LevelFilter value={controller.levels} counts={controller.counts} onChange={controller.setLevels} />
           <CopyVisibleButton entries={controller.visible} />

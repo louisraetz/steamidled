@@ -4,7 +4,7 @@ export function TelegramOff({ disabled, onConnect }: { disabled: boolean; onConn
   return (
     <>
       <p className="max-w-prose text-muted-foreground">
-        Get a message when idling stops or resumes, plus a daily report at midnight.
+        Get a message when idling stops or resumes, plus a daily report.
       </p>
       <div>
         <Button disabled={disabled} onClick={onConnect}>

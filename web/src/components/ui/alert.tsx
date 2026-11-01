@@ -3,13 +3,14 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const alertVariants = cva(
-  "relative grid w-full grid-cols-alert items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:gap-x-3 [&>svg]:size-5 [&>svg]:text-current",
+  "relative grid w-full grid-cols-alert items-start gap-y-0.5 rounded-lg border px-4 py-3 text-base has-[>svg]:gap-x-3 [&>svg]:size-5 [&>svg]:text-current",
   {
     variants: {
       variant: {
         default: "bg-card text-card-foreground [&>svg]:text-warning",
+        warning: "bg-warning-tint text-foreground [&>svg]:text-warning",
         destructive:
-          "bg-card text-destructive *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current",
+          "bg-destructive-tint text-foreground *:data-[slot=alert-title]:text-destructive [&>svg]:text-destructive",
       },
     },
     defaultVariants: {
@@ -54,7 +55,7 @@ function AlertDescription({
     <div
       data-slot="alert-description"
       className={cn(
-        "col-start-2 grid justify-items-start gap-2 text-sm text-muted-foreground",
+        "col-start-2 grid justify-items-start gap-2 text-base text-muted-foreground",
         className
       )}
       {...props}

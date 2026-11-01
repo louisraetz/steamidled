@@ -1,13 +1,12 @@
-import { ItemGroup } from '@/components/ui/item';
-import type { GameDisplay } from '../types/game-display';
-import { IdlingListItem } from './idling-list-item';
+import type { GameGroup } from '../types/game-group';
+import { IdlingListGroup } from './idling-list-group';
 
-export function IdlingList({ games }: { games: GameDisplay[] }) {
+export function IdlingList({ groups }: { groups: GameGroup[] }) {
   return (
-    <ItemGroup className="divide-y">
-      {games.map((game) => (
-        <IdlingListItem key={game.appid} game={game} />
+    <div className="flex flex-col gap-4">
+      {groups.map((group) => (
+        <IdlingListGroup key={group.key} group={group} />
       ))}
-    </ItemGroup>
+    </div>
   );
 }

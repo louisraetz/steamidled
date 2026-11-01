@@ -12,15 +12,15 @@ export const LogRow = memo(function LogRow({ entry }: { entry: LogEntry }) {
   return (
     <div
       data-level={entry.level}
-      className="group/log flex items-start gap-3 px-2 py-1 font-mono text-xs data-[level=error]:bg-destructive-tint"
+      className="group/log flex items-start gap-3 px-2 py-1 font-mono text-sm data-[level=error]:bg-destructive-tint"
     >
       <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-row sm:gap-3">
         <div className="flex shrink-0 gap-3">
-          <time dateTime={new Date(entry.time).toISOString()} className="w-16 text-tertiary">
+          <time dateTime={new Date(entry.time).toISOString()} className="w-18 text-tertiary">
             {formatLogClock(entry.time)}
           </time>
-          <span className={cn('w-10', tag.className)}>{tag.text}</span>
-          <span className="w-16 truncate text-muted-foreground">{entry.scope}</span>
+          <span className={cn('w-11', tag.className)}>{tag.text}</span>
+          <span className="w-18 truncate text-muted-foreground">{entry.scope}</span>
         </div>
         <div className="min-w-0 flex-1">
           <p className="break-words whitespace-pre-wrap">{entry.message}</p>

@@ -109,6 +109,10 @@ export function connectionCopy(connection: Connection): ConnectionCopy {
   return CONNECTION_COPY[connection.state] as ConnectionCopy;
 }
 
+export function canRetryNow(connection: Connection): boolean {
+  return connection.state === 'reconnecting' && connection.nextRetryAt !== null;
+}
+
 export function retryTarget(connection: Connection): number | null {
   return 'nextRetryAt' in connection ? connection.nextRetryAt : null;
 }

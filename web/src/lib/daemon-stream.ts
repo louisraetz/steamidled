@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { LOG_BUFFER_SIZE, STREAM_RETRY_BASE_MS, STREAM_RETRY_MAX_MS } from '@/lib/constants';
 import { queryKeys } from '@/lib/query-keys';
+import { writeServerSnapshot } from '@/lib/selection-sync';
 import type { DaemonSnapshot, LogEntry } from '@/lib/types';
 import { useConnectionStore } from '@/stores/connection-store';
 
@@ -24,6 +25,7 @@ function openSource(queryClient: QueryClient, onOpen: () => void, onClosed: () =
   const source = new EventSource('/api/events');
   const { markOpen, markLost, syncClock } = useConnectionStore.getState();
   let accountName: string | null | undefined;
+  let libraryVersion: number | undefined;
 
   source.addEventListener('open', () => {
     markOpen();
@@ -37,11 +39,14 @@ function openSource(queryClient: QueryClient, onOpen: () => void, onClosed: () =
   source.addEventListener('state', (event) => {
     const snapshot = JSON.parse((event as MessageEvent<string>).data) as DaemonSnapshot;
     syncClock(snapshot.serverTime);
-    queryClient.setQueryData(queryKeys.state, snapshot);
-    if (accountName !== undefined && accountName !== snapshot.accountName) {
+    writeServerSnapshot(snapshot);
+    const accountChanged = accountName !== undefined && accountName !== snapshot.accountName;
+    const libraryChanged = libraryVersion !== undefined && libraryVersion !== snapshot.libraryVersion;
+    if (accountChanged || libraryChanged) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.library });
     }
     accountName = snapshot.accountName;
+    libraryVersion = snapshot.libraryVersion;
   });
   source.addEventListener('log', (event) => {
     const entry = JSON.parse((event as MessageEvent<string>).data) as LogEntry;

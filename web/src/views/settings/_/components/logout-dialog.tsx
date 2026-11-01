@@ -23,7 +23,7 @@ export function LogoutDialog({ disabled, pending, onConfirm }: { disabled: boole
         <AlertDialogHeader>
           <AlertDialogTitle>Log out of Steam?</AlertDialogTitle>
           <AlertDialogDescription>
-            Idling stops and steamidled forgets the saved login. Favorites stay saved. To idle again, sign in here.
+            Idling stops and steamidled forgets the saved login. Auto-start games stay saved. To idle again, sign in here.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

@@ -31,7 +31,7 @@ function ItemSeparator({
 }
 
 const itemVariants = cva(
-  "group/item flex flex-wrap items-center rounded-md border border-transparent text-sm transition-colors duration-100 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 [a]:transition-colors [a]:hover:bg-accent/50",
+  "group/item flex flex-wrap items-center rounded-md border border-transparent text-base transition-colors duration-100 outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background [a]:transition-colors [a]:hover:bg-accent/50",
   {
     variants: {
       variant: {
@@ -42,7 +42,7 @@ const itemVariants = cva(
       size: {
         default: "gap-4 p-4",
         sm: "gap-2.5 px-4 py-3",
-        list: "flex-nowrap gap-1 rounded-none px-0 py-2",
+        list: "gap-x-3 gap-y-0 rounded-none border-x-0 border-t-0 border-b-border px-0 py-2",
       },
     },
     defaultVariants: {
@@ -122,7 +122,7 @@ function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="item-title"
       className={cn(
-        "flex w-fit items-center gap-2 text-sm leading-snug font-normal",
+        "flex w-fit items-center gap-2 text-base leading-snug font-normal",
         className
       )}
       {...props}
@@ -135,7 +135,7 @@ function ItemDescription({ className, ...props }: React.ComponentProps<"p">) {
     <p
       data-slot="item-description"
       className={cn(
-        "line-clamp-2 text-sm leading-normal font-normal text-balance text-muted-foreground",
+        "line-clamp-2 text-base leading-normal font-normal text-balance text-muted-foreground",
         "[&>a]:text-foreground [&>a]:underline [&>a]:underline-offset-4",
         className
       )}

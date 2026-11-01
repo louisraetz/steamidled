@@ -1,12 +1,16 @@
 import { Button } from '@/components/ui/button';
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { BarePage } from '@/components/bare-page';
+import { IdleMascot } from '@/components/idle-mascot';
 
 export function DaemonUnreachable({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
   return (
     <BarePage>
-      <main className="max-w-xl pt-12 sm:pt-24">
-        <Empty>
+      <main className="flex max-w-sm flex-col pt-12 pb-12 sm:pt-24">
+        <Empty className="py-0">
+          <EmptyMedia>
+            <IdleMascot variant="unplugged" className="size-24" />
+          </EmptyMedia>
           <EmptyHeader>
             <EmptyTitle>Can't reach steamidled</EmptyTitle>
             <EmptyDescription>
@@ -15,7 +19,7 @@ export function DaemonUnreachable({ retrying, onRetry }: { retrying: boolean; on
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
-            <Button pending={retrying} onClick={onRetry}>
+            <Button variant="outline" pending={retrying} onClick={onRetry}>
               Try again
             </Button>
           </EmptyContent>

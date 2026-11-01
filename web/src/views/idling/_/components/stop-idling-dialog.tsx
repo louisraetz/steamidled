@@ -13,8 +13,8 @@ export function StopIdlingDialog({ gameCount, disabled, pending, onConfirm }: St
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>
-        <Button variant="outline" size="sm" disabled={disabled} pending={pending}>
-          Stop idling
+        <Button variant="outline" disabled={disabled} pending={pending}>
+          Stop all
         </Button>
       </AlertDialogTrigger>
       <StopIdlingDialogContent gameCount={gameCount} onConfirm={onConfirm} />

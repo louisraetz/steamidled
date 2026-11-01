@@ -1,44 +1,48 @@
 import { connectionCopy } from '@/lib/connection-copy';
 import { SHARED_TOTAL_TITLE } from '@/lib/constants';
 import { formatPhase, formatSession, formatTotal } from '@/lib/format';
-import type { Connection, IdlingGameSnapshot } from '@/lib/types';
+import type { Connection, DaemonSnapshot, IdlingGameSnapshot } from '@/lib/types';
+import { STATUS_GROUP } from '../constants/groups';
+import { SCHEDULE_OFF_NEXT } from '../constants/status';
 import type { GameDisplay } from '../types/game-display';
 
 function statusOf(
   game: IdlingGameSnapshot,
   connection: Connection,
+  scheduleEnabled: boolean,
   now: number
-): Pick<GameDisplay, 'status' | 'next' | 'nextShort'> {
-  if (game.status === 'paused') {
-    return { status: 'paused', next: 'Playing elsewhere', nextShort: 'Playing elsewhere' };
-  }
+): Pick<GameDisplay, 'status' | 'next'> {
+  if (game.status === 'paused') return { status: 'paused', next: 'Playing elsewhere' };
   if (game.status === 'cooldown') {
-    const left = formatPhase((game.cooldownUntil ?? now) - now);
-    return { status: 'cooldown', next: `Idles again in ${left}`, nextShort: left };
+    return { status: 'cooldown', next: `Idles again in ${formatPhase((game.cooldownUntil ?? now) - now)}` };
   }
   const frozen = connectionCopy(connection).frozenReason;
-  if (frozen) return { status: 'paused', next: frozen, nextShort: frozen };
-  if (game.exempt) return { status: 'exempt', next: 'No cooldown', nextShort: null };
-  const left = formatPhase((game.cooldownAt ?? now) - now);
-  return { status: 'idling', next: `Cooldown in ${left}`, nextShort: left };
+  if (frozen) return { status: 'paused', next: frozen };
+  if (game.exempt) return { status: 'idling', next: 'No cooldown' };
+  if (!scheduleEnabled) return { status: 'idling', next: SCHEDULE_OFF_NEXT };
+  if (game.cooldownAt === null) return { status: 'idling', next: 'Starting' };
+  return { status: 'idling', next: `Cooldown in ${formatPhase(game.cooldownAt - now)}` };
 }
 
-export function describeGame(
-  game: IdlingGameSnapshot,
-  connection: Connection,
-  serverTime: number,
-  now: number
-): GameDisplay {
-  const delta = game.counting ? Math.max(0, now - serverTime) : 0;
-  const status = statusOf(game, connection, now);
+export function describeGame(game: IdlingGameSnapshot, snapshot: DaemonSnapshot, now: number): GameDisplay {
+  const delta = game.counting ? Math.max(0, now - snapshot.serverTime) : 0;
+  const status = statusOf(game, snapshot.connection, snapshot.settings.schedule.enabled, now);
+  const today = formatSession(game.todayGainedMs + delta);
   return {
     appid: game.appid,
     name: game.name,
     ...status,
-    statusDetail: status.nextShort ? `· ${status.nextShort}` : '',
+    scheduleStatus: game.status,
+    exempt: game.exempt,
+    cooldownAt: game.cooldownAt,
+    cooldownUntil: game.cooldownUntil,
     nextDetail: `· ${status.next}`,
     total: game.totalMs === null ? '' : formatTotal(game.totalMs + delta),
     totalTitle: game.totalMs === null ? SHARED_TOTAL_TITLE : undefined,
     session: formatSession(game.gainedMs + delta),
+    today,
+    todayTitle: `${today} today`,
+    dimmed: STATUS_GROUP[status.status].dimmed,
+    counting: game.counting,
   };
 }

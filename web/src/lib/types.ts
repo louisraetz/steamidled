@@ -12,5 +12,6 @@ export type {
   LoginFlowState,
   Phase,
   TelegramConfirmResult,
+  TelegramNotifyPrefs,
   TelegramSnapshot,
 } from '../../../src/web/types';

@@ -1,3 +1,4 @@
+import { groupGames } from '../helpers/group-games';
 import { useContentKind } from '../hooks/use-content-kind';
 import { useIdlingGames } from '../hooks/use-idling-games';
 import { IdlingEmpty } from './idling-empty';
@@ -12,15 +13,16 @@ export function IdlingContent() {
   if (kind === 'loading') return <IdlingSkeleton />;
   if (kind === 'empty') return <IdlingEmpty />;
   if (kind === 'none') return null;
+  const groups = groupGames(games);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <IdlingSummary games={games} />
       <div className="hidden sm:block">
-        <IdlingTable games={games} />
+        <IdlingTable groups={groups} />
       </div>
       <div className="sm:hidden">
-        <IdlingList games={games} />
+        <IdlingList groups={groups} />
       </div>
     </div>
   );

@@ -12,7 +12,7 @@ export function ConnectionStatus() {
   const Icon = display.icon;
 
   return (
-    <span className="inline-flex min-w-0 items-center gap-2 text-sm text-muted-foreground">
+    <span className="inline-flex min-w-0 items-center gap-2 text-base text-muted-foreground">
       <Icon className={cn('size-5 shrink-0', toneClass[display.tone])} />
       <span className="hidden truncate sm:inline">
         <RichText parts={display.label} />

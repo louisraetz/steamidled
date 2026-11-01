@@ -10,7 +10,7 @@ export function SteamGuardStep({ guard, actions }: { guard: GuardState; actions:
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <h1 className="text-xl font-semibold">Steam Guard</h1>
+        <h1 className="text-2xl font-semibold">Steam Guard</h1>
         <p className="text-muted-foreground">{guardPrompt(guard.guard, guard.emailDomain)}</p>
       </div>
       <GuardInput guard={guard} firstTriesLeft={firstTriesLeft} actions={actions} />

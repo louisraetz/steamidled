@@ -7,8 +7,8 @@ export function SseLostBanner() {
   if (!lost) return null;
 
   return (
-    <div className="mx-auto w-full max-w-6xl shrink-0 px-4 pt-4 sm:px-6 lg:px-8">
-      <Alert>
+    <div className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 sm:px-6 lg:px-8">
+      <Alert variant="warning">
         <Spinner />
         <AlertTitle>Lost connection to steamidled. Retrying…</AlertTitle>
       </Alert>

@@ -22,7 +22,7 @@ function ScrollArea({
         data-slot="scroll-area-viewport"
         ref={viewportRef}
         onScroll={onViewportScroll}
-        className="size-full transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-1"
+        className="size-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset *:block!"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

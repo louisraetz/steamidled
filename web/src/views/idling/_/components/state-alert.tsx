@@ -19,7 +19,7 @@ export function StateAlert() {
         <p>
           <RichText parts={content.body} />
         </p>
-        <StateAlertRetry visible={content.retry} />
+        <StateAlertRetry label={content.retryLabel} />
       </AlertDescription>
     </Alert>
   );

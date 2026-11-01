@@ -1,47 +1,59 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/ibm-plex-sans";
-@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource/chakra-petch/400.css";
+@import "@fontsource/chakra-petch/500.css";
+@import "@fontsource/chakra-petch/600.css";
+@import "@fontsource/chakra-petch/700.css";
+@import "@fontsource/share-tech-mono/400.css";
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  color-scheme: dark;
   --radius: 0.375rem;
-  --background: #ffffff;
-  --foreground: #171717;
-  --card: #ffffff;
-  --card-foreground: #171717;
-  --popover: #ffffff;
-  --popover-foreground: #171717;
-  --primary: #0b6bcb;
-  --primary-foreground: #ffffff;
-  --secondary: #f5f5f5;
-  --secondary-foreground: #171717;
-  --muted: #f5f5f5;
-  --muted-foreground: #525252;
-  --tertiary: #737373;
-  --accent: #f5f5f5;
-  --accent-foreground: #171717;
-  --destructive: #b91c1c;
-  --destructive-tint: #fef2f2;
-  --success: #15803d;
-  --warning: #b45309;
-  --border: #e5e5e5;
-  --input: #737373;
-  --ring: #0b6bcb;
+  --background: #14130f;
+  --surface: #1c1a16;
+  --foreground: #f3efe6;
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface);
+  --popover-foreground: var(--foreground);
+  --primary: #93cf6e;
+  --primary-foreground: var(--background);
+  --secondary: #26231e;
+  --secondary-foreground: var(--foreground);
+  --muted: var(--secondary);
+  --muted-foreground: #b9b2a4;
+  --tertiary: #979083;
+  --accent: var(--secondary);
+  --accent-foreground: var(--foreground);
+  --destructive: #f0806e;
+  --destructive-tint: #2a1714;
+  --success: var(--primary);
+  --warning: #f2b35b;
+  --warning-tint: #2a2214;
+  --cooldown: #8fb3e8;
+  --border: #312e28;
+  --input: #6e695f;
+  --ring: var(--foreground);
 }
 
 @theme inline {
-  --font-sans: "IBM Plex Sans Variable", ui-sans-serif, sans-serif;
-  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --font-sans: "Chakra Petch", ui-sans-serif, sans-serif;
+  --font-mono: "Share Tech Mono", ui-monospace, monospace;
   --text-xs--line-height: 1.5;
   --text-sm--line-height: 1.5;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+  --animate-mascot-blink: mascot-blink 6s ease infinite;
+  --animate-mascot-z-1: mascot-z 400ms var(--ease-out) both;
+  --animate-mascot-z-2: mascot-z 400ms var(--ease-out) 120ms both;
   --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 6px);
   --color-background: var(--background);
+  --color-surface: var(--surface);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -60,14 +72,47 @@
   --color-destructive-tint: var(--destructive-tint);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-warning-tint: var(--warning-tint);
+  --color-cooldown: var(--cooldown);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
 }
 
+@utility odometer-gap {
+  width: 0.3em;
+}
+
+@utility odometer-digit {
+  width: 0.66em;
+  text-align: center;
+}
+
 @utility content-auto {
   content-visibility: auto;
-  contain-intrinsic-size: auto 2.25rem;
+  contain-intrinsic-size: auto 3rem;
+}
+
+@keyframes mascot-blink {
+  0%,
+  96%,
+  100% {
+    transform: scaleY(1);
+  }
+  98% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes mascot-z {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @keyframes appear {
@@ -98,13 +143,19 @@
   }
 }
 
+[data-slot="odometer"][data-intro="true"] [data-slot="odometer-strip"] {
+  @starting-style {
+    translate: 0 0;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
 
   body {
-    @apply bg-background font-sans text-sm text-foreground antialiased;
+    @apply bg-background font-sans text-base text-foreground antialiased;
   }
 
   button:not(:disabled),

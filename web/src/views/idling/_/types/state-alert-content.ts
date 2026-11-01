@@ -6,5 +6,5 @@ export interface StateAlertContent {
   icon: ComponentType<{ className?: string }>;
   title: string;
   body: TextPart[];
-  retry: boolean;
+  retryLabel: string | null;
 }

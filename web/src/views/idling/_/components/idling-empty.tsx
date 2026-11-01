@@ -1,32 +1,33 @@
-import { Link } from 'wouter';
+import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
-import { useCanMutate } from '@/hooks/use-can-mutate';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
+import { IdleMascot } from '@/components/idle-mascot';
 import { useDaemonState } from '@/hooks/use-daemon-state';
-import { useIdlingActions } from '../hooks/use-idling-actions';
-import { IdlingEmptyNoFavorites } from './idling-empty-no-favorites';
+import { MAX_IDLE_GAMES } from '@/lib/constants';
+import { usePickerStore } from '@/stores/picker-store';
+import { StartAutoStartButton } from './start-auto-start-button';
 
 export function IdlingEmpty() {
-  const favorites = useDaemonState((snapshot) => snapshot.favoritesInLibrary) ?? 0;
-  const canMutate = useCanMutate();
-  const { startFavorites } = useIdlingActions();
-  if (favorites === 0) return <IdlingEmptyNoFavorites />;
+  const autoStart = useDaemonState((snapshot) => snapshot.favoritesInLibrary) ?? 0;
+  const showPicker = usePickerStore((state) => state.show);
 
   return (
     <Empty>
+      <EmptyMedia>
+        <IdleMascot variant="awake" blink className="size-24" />
+      </EmptyMedia>
       <EmptyHeader>
-        <EmptyTitle>Not idling</EmptyTitle>
+        <EmptyTitle>Nothing is idling</EmptyTitle>
         <EmptyDescription>
-          Signed in and ready. Start your {favorites} favorites or pick games in Library.
+          Pick up to {MAX_IDLE_GAMES} games. steamidled plays them in the background so their hours keep growing.
         </EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
-        <Button disabled={!canMutate} pending={startFavorites.isPending} onClick={() => startFavorites.mutate()}>
-          Start favorites
+        <Button data-picker-opener onClick={(event) => showPicker(event.currentTarget)}>
+          <Plus />
+          Add games
         </Button>
-        <Button variant="outline" asChild>
-          <Link href="/library">Choose games</Link>
-        </Button>
+        <StartAutoStartButton count={autoStart} />
       </EmptyContent>
     </Empty>
   );

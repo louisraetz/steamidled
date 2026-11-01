@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { TelegramPreferences } from './telegram-preferences';
 import { TurnOffDialog } from './turn-off-dialog';
 
 interface TelegramConnectedProps {
@@ -23,6 +24,7 @@ export function TelegramConnected(props: TelegramConnectedProps) {
         </Button>
         <TurnOffDialog disabled={props.disabled} pending={props.turningOff} onConfirm={props.onTurnOff} />
       </div>
+      <TelegramPreferences disabled={props.disabled} />
     </>
   );
 }

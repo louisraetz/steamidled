@@ -1,4 +1,12 @@
-import type { ApiError, DaemonSnapshot, LibraryGame, LogEntry, TelegramConfirmResult } from '@/lib/types';
+import type { SettingsPatch } from '@/lib/settings';
+import type {
+  ApiError,
+  DaemonSnapshot,
+  LibraryGame,
+  LogEntry,
+  TelegramConfirmResult,
+  TelegramNotifyPrefs,
+} from '@/lib/types';
 
 export class ApiRequestError extends Error {
   constructor(
@@ -53,4 +61,20 @@ export const api = {
   telegramToken: (token: string) => request<DaemonSnapshot>('POST', '/api/telegram/token', { token }),
   telegramConfirm: () => request<TelegramConfirmResult>('POST', '/api/telegram/confirm'),
   telegramDisable: () => request<DaemonSnapshot>('DELETE', '/api/telegram'),
+  telegramNotify: (prefs: Partial<TelegramNotifyPrefs>) =>
+    request<DaemonSnapshot>('PUT', '/api/telegram/notifications', prefs),
+  telegramTest: () => request<DaemonSnapshot>('POST', '/api/telegram/test'),
+  telegramReport: () => request<DaemonSnapshot>('POST', '/api/telegram/report'),
+  updateSettings: (patch: SettingsPatch) => request<DaemonSnapshot>('PUT', '/api/settings', patch),
+  rerollSchedules: () => request<DaemonSnapshot>('POST', '/api/schedule/reroll'),
+  endAllCooldowns: () => request<DaemonSnapshot>('POST', '/api/schedule/end-all-cooldowns'),
+  coolDownNow: (appId: number, hours: number | null) =>
+    request<DaemonSnapshot>('POST', `/api/games/${appId}/cooldown`, { hours }),
+  endCooldownNow: (appId: number) => request<DaemonSnapshot>('DELETE', `/api/games/${appId}/cooldown`),
+  setNextCooldownIn: (appId: number, hours: number) =>
+    request<DaemonSnapshot>('PUT', `/api/games/${appId}/next-cooldown`, { hours }),
+  setCooldownRemaining: (appId: number, hours: number) =>
+    request<DaemonSnapshot>('PUT', `/api/games/${appId}/cooldown-remaining`, { hours }),
+  refreshLibrary: () => request<DaemonSnapshot>('POST', '/api/library/refresh'),
+  flushNow: () => request<DaemonSnapshot>('POST', '/api/session/flush-now'),
 };

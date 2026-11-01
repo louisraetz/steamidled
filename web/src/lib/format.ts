@@ -1,4 +1,5 @@
-const MINUTE_MS = 60_000;
+import { MINUTE_MS } from '@/lib/constants';
+
 const HOUR_MINUTES = 60;
 const DAY_MINUTES = 24 * HOUR_MINUTES;
 
@@ -31,6 +32,23 @@ export function formatSession(ms: number): string {
   return `+${hours}h ${minutes % HOUR_MINUTES}m`;
 }
 
+export function formatGain(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / MINUTE_MS));
+  const hours = Math.floor(minutes / HOUR_MINUTES);
+  const rest = minutes % HOUR_MINUTES;
+  if (hours === 0) return `+${rest}m`;
+  return `+${formatCount(hours)}h ${String(rest).padStart(2, '0')}m`;
+}
+
+export function describeGain(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / MINUTE_MS));
+  const hours = Math.floor(minutes / HOUR_MINUTES);
+  const rest = minutes % HOUR_MINUTES;
+  const minutePart = `${rest} ${pluralize(rest, 'minute')}`;
+  if (hours === 0) return minutePart;
+  return `${formatCount(hours)} ${pluralize(hours, 'hour')} ${minutePart}`;
+}
+
 export function formatPhase(ms: number): string {
   if (ms < MINUTE_MS) return '<1m';
   const minutes = Math.floor(ms / MINUTE_MS);
@@ -48,6 +66,10 @@ export function formatCountdown(ms: number): string {
   const seconds = String(totalSeconds % 60).padStart(2, '0');
   if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`;
   return `${minutes}:${seconds}`;
+}
+
+export function formatHourOfDay(hour: number): string {
+  return `${String(hour).padStart(2, '0')}:00`;
 }
 
 export function formatClock(time: number): string {

@@ -20,7 +20,7 @@ export function LoginMethods({ actions }: { actions: LoginActions }) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
-        <h1 className="text-xl font-semibold">Sign in to Steam</h1>
+        <h1 className="text-2xl font-semibold">Sign in to Steam</h1>
         <p className="text-muted-foreground">The login is saved on this machine, so idling survives restarts.</p>
       </div>
       <Tabs value={method} onValueChange={changeMethod} className="gap-6">

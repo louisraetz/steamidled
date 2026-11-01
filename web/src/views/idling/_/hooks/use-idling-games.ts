@@ -9,7 +9,7 @@ export function useIdlingGames(): GameDisplay[] {
   return (
     useDaemonState((snapshot) =>
       sortGames(
-        snapshot.games.map((game) => describeGame(game, snapshot.connection, snapshot.serverTime, now))
+        snapshot.games.map((game) => describeGame(game, snapshot, now))
       )
     ) ?? []
   );

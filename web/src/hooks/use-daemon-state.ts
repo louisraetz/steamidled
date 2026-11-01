@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { queryKeys } from '@/lib/query-keys';
+import { receiveServerSnapshot } from '@/lib/selection-sync';
 import type { DaemonSnapshot } from '@/lib/types';
 import { useConnectionStore } from '@/stores/connection-store';
 
 async function fetchState(): Promise<DaemonSnapshot> {
   const snapshot = await api.state();
   useConnectionStore.getState().syncClock(snapshot.serverTime);
-  return snapshot;
+  return receiveServerSnapshot(snapshot);
 }
 
 export function useDaemonQuery() {

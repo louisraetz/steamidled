@@ -12,6 +12,7 @@ export function useSnapshotMutation<Variables = void>(
   const cache = useSnapshotCache();
   return useMutation({
     mutationFn,
+    onMutate: () => options.onMutate?.(),
     onSuccess: (snapshot, variables) => {
       cache.write(snapshot);
       options.onSuccess?.(snapshot, variables);

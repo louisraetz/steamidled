@@ -2,6 +2,8 @@ import { GUARD_CODE_LENGTH } from '../schemas/login-schema';
 
 export const QR_SIZE = 192;
 
+export const QR_LIFETIME_MS = 120_000;
+
 export const GUARD_SLOTS = Array.from({ length: GUARD_CODE_LENGTH }, (_, index) => index);
 
 export const PASSWORD_ALERTS: Record<string, { title: string; body: string }> = {

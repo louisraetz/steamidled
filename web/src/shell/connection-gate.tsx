@@ -3,10 +3,12 @@ import { useDaemonQuery } from '@/hooks/use-daemon-state';
 import { LoginView } from '@/views/login/login-view';
 import { BootSkeleton } from './_/components/boot-skeleton';
 import { DaemonUnreachable } from './_/components/daemon-unreachable';
+import { useDocumentTitle } from './_/hooks/use-document-title';
 import { AppShell } from './app-shell';
 
 export function ConnectionGate() {
   useDaemonEvents();
+  useDocumentTitle();
   const query = useDaemonQuery();
   if (query.isPending) return <BootSkeleton />;
   if (!query.data) {
