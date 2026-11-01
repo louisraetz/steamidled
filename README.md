@@ -99,9 +99,9 @@ Rather click than type? `--web` runs the headless daemon plus a web GUI:
 steamidled --web
 ```
 
-Open http://127.0.0.1:4821. From there you can log in (QR or password + Steam Guard), add and remove games with one click, mark auto-start games (the CLI's ⭐ favorites), give one game no cooldown (the CLI's ∞ exempt), set up Telegram, and watch progress and logs live. The ⋯ menu on each game sends it into a cooldown now, ends a cooldown early or moves the next one. No interactive first run needed: without a saved login it simply waits for you in the browser.
+Open http://127.0.0.1:4821. From there you can log in (QR or password + Steam Guard), pick games and apply them in one go, mark auto-start games (the CLI's ⭐ favorites), give one game no cooldown (the CLI's ∞ exempt), set up Telegram, and watch progress and logs live. The ⋯ menu on each game sends it into a cooldown now, ends a cooldown early or moves the next one. No interactive first run needed: without a saved login it simply waits for you in the browser.
 
-Your picks last until the daemon restarts. After that it idles your first 32 auto-start games again, or nothing until you pick something.
+Your picks survive restarts, cooldown progress included. Only the very first start and a sign-in after logging out idle your first 32 auto-start games.
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
@@ -284,6 +284,7 @@ Everything lives in `~/.steam-idler/` (inside Docker: the `steamidled-config` vo
 ~/.steam-idler/
 ├── credentials.json          # Your login token (keep it secret 🤫)
 ├── favorites-{username}.json # Your favorites + exempt game pick
+├── session-{username}.json   # Web GUI: the games idling right now, restored after a restart
 ├── settings.json             # Optional schedule profile, flush interval, report hour, ...
 └── telegram.json             # Optional Telegram bot token + chat id
 ```
