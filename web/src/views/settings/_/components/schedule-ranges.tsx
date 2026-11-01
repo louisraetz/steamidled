@@ -1,30 +1,28 @@
 import { FieldSet } from '@/components/ui/field';
-import { useCanMutate } from '@/hooks/use-can-mutate';
-import { useDaemonState } from '@/hooks/use-daemon-state';
 import { RANGES } from '../constants/schedule';
-import { useScheduleForm } from '../hooks/use-schedule-form';
+import type { ScheduleFormState } from '../types/schedule-form-state';
 import { RangeField } from './range-field';
-import { ScheduleSentence } from './schedule-sentence';
 
-export function ScheduleRanges() {
-  const enabled = useDaemonState((snapshot) => snapshot.settings.schedule.enabled) ?? true;
-  const canMutate = useCanMutate();
-  const { form, savedKey, queueSave } = useScheduleForm();
-  const disabled = !enabled || !canMutate;
+interface ScheduleRangesProps {
+  schedule: ScheduleFormState;
+  disabled: boolean;
+  visible: boolean;
+}
 
+export function ScheduleRanges({ schedule, disabled, visible }: ScheduleRangesProps) {
+  if (!visible) return null;
   return (
-    <FieldSet disabled={disabled} aria-label="Cooldown ranges">
+    <FieldSet disabled={disabled} aria-label="Cooldown ranges" className="md:grid md:grid-cols-2 md:gap-8">
       {RANGES.map((range) => (
         <RangeField
           key={range.key}
           range={range}
-          form={form}
-          saved={savedKey === range.key}
+          form={schedule.form}
+          saved={schedule.savedKey === range.key}
           disabled={disabled}
-          onCommit={() => queueSave(range.key)}
+          onCommit={() => schedule.queueSave(range.key)}
         />
       ))}
-      <ScheduleSentence control={form.control} enabled={enabled} />
     </FieldSet>
   );
 }

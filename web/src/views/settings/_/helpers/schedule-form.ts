@@ -1,4 +1,4 @@
-import type { ScheduleSettings } from '@/lib/settings';
+import type { ScheduleRanges } from '@/lib/settings';
 import type { RangeDefinition, RangeValues, ScheduleFormValues } from '../types/schedule-form';
 import { RANGE_BY_KEY } from '../constants/schedule';
 
@@ -11,19 +11,23 @@ function clamp(value: number, range: RangeDefinition, fallback: number): number 
   return Math.min(range.max, Math.max(range.min, value));
 }
 
-export function savedRange(range: RangeDefinition, schedule: ScheduleSettings): RangeValues {
-  const [minField, maxField] = range.fields;
-  return { min: toUnits(schedule[minField], range), max: toUnits(schedule[maxField], range) };
+export function unitsOf(hours: RangeValues, range: RangeDefinition): RangeValues {
+  return { min: toUnits(hours.min, range), max: toUnits(hours.max, range) };
 }
 
-export function toFormValues(schedule: ScheduleSettings): ScheduleFormValues {
+export function savedRange(range: RangeDefinition, ranges: ScheduleRanges): RangeValues {
+  const [minField, maxField] = range.fields;
+  return unitsOf({ min: ranges[minField], max: ranges[maxField] }, range);
+}
+
+export function toFormValues(ranges: ScheduleRanges): ScheduleFormValues {
   return {
-    idle: savedRange(RANGE_BY_KEY.idle, schedule),
-    cooldown: savedRange(RANGE_BY_KEY.cooldown, schedule),
+    idle: savedRange(RANGE_BY_KEY.idle, ranges),
+    cooldown: savedRange(RANGE_BY_KEY.cooldown, ranges),
   };
 }
 
-export function rangePatch(range: RangeDefinition, values: RangeValues): Partial<ScheduleSettings> {
+export function rangePatch(range: RangeDefinition, values: RangeValues): Partial<ScheduleRanges> {
   const [minField, maxField] = range.fields;
   return {
     [minField]: Math.round(values.min * range.hoursPerUnit),
@@ -31,9 +35,9 @@ export function rangePatch(range: RangeDefinition, values: RangeValues): Partial
   };
 }
 
-export function isSavedRange(range: RangeDefinition, values: RangeValues, schedule: ScheduleSettings): boolean {
+export function isSavedRange(range: RangeDefinition, values: RangeValues, ranges: ScheduleRanges): boolean {
   const patch = rangePatch(range, values);
-  return range.fields.every((field) => patch[field] === schedule[field]);
+  return range.fields.every((field) => patch[field] === ranges[field]);
 }
 
 export function sliderValue(values: RangeValues | undefined, range: RangeDefinition): number[] {

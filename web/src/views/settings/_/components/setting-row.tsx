@@ -6,15 +6,19 @@ interface SettingRowProps {
   id: string;
   label: string;
   description?: string;
+  hint?: ReactNode;
   disabled?: boolean;
   children: ReactNode;
 }
 
-export function SettingRow({ id, label, description, disabled = false, children }: SettingRowProps) {
+export function SettingRow({ id, label, description, hint, disabled = false, children }: SettingRowProps) {
   return (
     <Field orientation="horizontal" data-disabled={disabled}>
       <FieldContent>
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <div className="flex items-center gap-1.5">
+          <FieldLabel htmlFor={id}>{label}</FieldLabel>
+          {hint}
+        </div>
         <SettingDescription text={description} />
       </FieldContent>
       {children}

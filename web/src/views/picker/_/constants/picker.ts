@@ -5,3 +5,4 @@ export const TOASTER_SELECTOR = '[data-sonner-toaster]';
 export const OPENER_SELECTOR = '[data-picker-opener]';
 export const ROW_ACTION_CLASS = 'w-24 group-aria-disabled/row:opacity-50 sm:w-28';
 export const REFRESH_LIBRARY_LABEL = 'Refresh library';
+export const REFRESH_LIBRARY_SHORT_LABEL = 'Refresh';

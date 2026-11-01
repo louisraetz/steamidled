@@ -2,7 +2,7 @@ import { Redirect, useLocation } from 'wouter';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { IdlingView } from '@/views/idling/idling-view';
 import { LogsView } from '@/views/logs/logs-view';
-import { SettingsView } from '@/views/settings/settings-view';
+import { LazySettingsView } from './_/components/lazy-settings-view';
 import { SseLostBanner } from './_/components/sse-lost-banner';
 import { TopBar } from './_/components/top-bar';
 import { DEFAULT_PATH } from './_/constants/views';
@@ -25,7 +25,7 @@ export function AppShell() {
           <LogsView />
         </TabsContent>
         <TabsContent value="settings">
-          <SettingsView />
+          <LazySettingsView />
         </TabsContent>
       </main>
     </Tabs>

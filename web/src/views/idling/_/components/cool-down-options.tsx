@@ -13,7 +13,7 @@ interface CoolDownOptionsProps {
 
 export function CoolDownOptions({ game, disabled, inset, onCustom }: CoolDownOptionsProps) {
   const range = useDaemonState(
-    (snapshot) => `${snapshot.settings.schedule.cooldownMinHours}–${snapshot.settings.schedule.cooldownMaxHours}h`
+    (snapshot) => `${snapshot.effectiveSchedule.cooldownMinHours}–${snapshot.effectiveSchedule.cooldownMaxHours}h`
   );
   const coolDown = useScheduleCommand('cooldown-now');
   const run = (hours: number | null) => coolDown.mutate({ appid: game.appid, name: game.name, hours });

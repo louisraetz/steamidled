@@ -22,7 +22,7 @@ export function TelegramTokenForm({ pending, disabled, serverError, onSubmit, on
   });
 
   return (
-    <form className="flex flex-col gap-4" noValidate onSubmit={form.handleSubmit((values) => onSubmit(values.token))}>
+    <form className="flex max-w-xl flex-col gap-4" noValidate onSubmit={form.handleSubmit((values) => onSubmit(values.token))}>
       <Controller
         name="token"
         control={form.control}

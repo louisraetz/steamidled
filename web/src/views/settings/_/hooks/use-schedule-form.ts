@@ -4,18 +4,19 @@ import { useForm } from 'react-hook-form';
 import { useDaemonState } from '@/hooks/use-daemon-state';
 import { useSnapshotCache } from '@/hooks/use-snapshot';
 import { useStableCallback } from '@/hooks/use-stable-callback';
-import type { ScheduleSettings } from '@/lib/settings';
+import type { ScheduleRanges } from '@/lib/settings';
 import { RANGE_BY_KEY } from '../constants/schedule';
 import { SAVE_DEBOUNCE_MS } from '../constants/settings';
 import { isSavedRange, rangePatch, sameRange, savedRange, toFormValues } from '../helpers/schedule-form';
+import { customBase } from '../helpers/schedule-profile';
 import { scheduleFormSchema } from '../schemas/schedule-schema';
 import type { RangeKey, ScheduleFormValues } from '../types/schedule-form';
 import { useSavedFlash } from './use-saved-flash';
 import { useSettingsMutation } from './use-settings-mutation';
 
 export function useScheduleForm() {
-  const schedule = useDaemonState((snapshot) => snapshot.settings.schedule);
-  const values = useMemo(() => schedule && toFormValues(schedule), [schedule]);
+  const base = useDaemonState(customBase);
+  const values = useMemo(() => base && toFormValues(base), [base]);
   const form = useForm<ScheduleFormValues>({
     resolver: zodResolver(scheduleFormSchema),
     values,
@@ -27,27 +28,31 @@ export function useScheduleForm() {
   const saved = useSavedFlash<RangeKey>();
   const timers = useRef<Partial<Record<RangeKey, ReturnType<typeof setTimeout>>>>({});
 
-  const resetPair = (key: RangeKey, source: ScheduleSettings) => {
+  const resetPair = (key: RangeKey, source: ScheduleRanges) => {
     const pair = savedRange(RANGE_BY_KEY[key], source);
     form.resetField(`${key}.min`, { defaultValue: pair.min });
     form.resetField(`${key}.max`, { defaultValue: pair.max });
   };
 
   const save = useStableCallback(async (key: RangeKey) => {
+    if (!(await form.trigger(key))) return;
+    const snapshot = cache.read();
+    if (!snapshot) return;
     const range = RANGE_BY_KEY[key];
-    if (!schedule || !(await form.trigger(key))) return;
+    const current = customBase(snapshot);
     const pair = form.getValues(key);
-    if (isSavedRange(range, pair, schedule)) return;
+    const isCustom = snapshot.settings.schedule.profile === 'custom';
+    if (isCustom && isSavedRange(range, pair, current)) return;
     mutation.mutate(
-      { schedule: rangePatch(range, pair) },
+      { schedule: { ...current, ...rangePatch(range, pair), profile: 'custom' } },
       {
-        onSuccess: (snapshot) => {
-          if (sameRange(form.getValues(key), pair)) resetPair(key, snapshot.settings.schedule);
+        onSuccess: (next) => {
+          if (sameRange(form.getValues(key), pair)) resetPair(key, customBase(next));
           saved.flash(key);
         },
         onError: () => {
-          const current = cache.read()?.settings.schedule;
-          if (current) resetPair(key, current);
+          const rolledBack = cache.read();
+          if (rolledBack) resetPair(key, customBase(rolledBack));
         },
       }
     );

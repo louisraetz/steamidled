@@ -13,7 +13,7 @@ interface TelegramWaitingProps {
 export function TelegramWaiting({ botUsername, cancelling, onCancel }: TelegramWaitingProps) {
   const polling = useTelegramPolling();
   return (
-    <>
+    <div className="flex flex-col gap-4">
       <p className="max-w-prose">Send /start to @{botUsername} in Telegram.</p>
       <TelegramWaitingStatus timedOut={polling.timedOut} botUsername={botUsername} />
       <div className="flex flex-wrap items-center gap-2">
@@ -28,6 +28,6 @@ export function TelegramWaiting({ botUsername, cancelling, onCancel }: TelegramW
           Cancel
         </Button>
       </div>
-    </>
+    </div>
   );
 }

@@ -13,11 +13,14 @@ const toggleVariants = cva(
           "border border-input bg-transparent hover:bg-accent hover:text-accent-foreground",
         quiet:
           "bg-transparent text-tertiary focus-visible:text-foreground data-[state=on]:bg-transparent",
+        tile:
+          "group/tile flex-col items-start justify-start gap-1 rounded-lg py-3 text-left whitespace-normal text-foreground data-[state=on]:bg-surface data-[state=on]:text-foreground data-[state=on]:ring-1 data-[state=on]:ring-foreground aria-disabled:cursor-default aria-disabled:text-tertiary aria-disabled:hover:bg-transparent aria-disabled:hover:text-tertiary aria-disabled:data-[state=on]:text-tertiary aria-disabled:data-[state=on]:ring-tertiary",
       },
       size: {
         default: "h-9 min-w-9 px-2",
         sm: "h-8 min-w-8 px-1.5",
         lg: "h-10 min-w-10 px-2.5",
+        tile: "h-auto min-w-0",
       },
     },
     defaultVariants: {

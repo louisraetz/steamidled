@@ -8,7 +8,7 @@ export function PickerHeader() {
   const count = useDaemonState((snapshot) => snapshot.games.length) ?? 0;
   return (
     <SheetHeader>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
         <SheetTitle>Add games</SheetTitle>
         <RefreshLibraryButton />
       </div>

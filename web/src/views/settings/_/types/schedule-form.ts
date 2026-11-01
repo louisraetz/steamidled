@@ -1,4 +1,4 @@
-import type { ScheduleSettings } from '@/lib/settings';
+import type { ScheduleRangeField } from '@/lib/settings';
 
 export type RangeKey = 'idle' | 'cooldown';
 
@@ -9,7 +9,7 @@ export interface RangeValues {
 
 export type ScheduleFormValues = Record<RangeKey, RangeValues>;
 
-export type ScheduleHoursField = Exclude<keyof ScheduleSettings, 'enabled'>;
+export type HoursByRange = Record<RangeKey, RangeValues>;
 
 export interface RangeDefinition {
   key: RangeKey;
@@ -19,5 +19,5 @@ export interface RangeDefinition {
   hoursPerUnit: number;
   min: number;
   max: number;
-  fields: readonly [ScheduleHoursField, ScheduleHoursField];
+  fields: readonly [ScheduleRangeField, ScheduleRangeField];
 }

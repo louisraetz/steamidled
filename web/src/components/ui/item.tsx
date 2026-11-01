@@ -43,6 +43,7 @@ const itemVariants = cva(
         default: "gap-4 p-4",
         sm: "gap-2.5 px-4 py-3",
         list: "gap-x-3 gap-y-0 rounded-none border-x-0 border-t-0 border-b-border px-0 py-2",
+        flush: "flex-nowrap gap-3 p-0",
       },
     },
     defaultVariants: {

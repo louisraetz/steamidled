@@ -2,20 +2,20 @@ import { Button } from '@/components/ui/button';
 import { useCanMutate } from '@/hooks/use-can-mutate';
 import { useDaemonState } from '@/hooks/use-daemon-state';
 import { SCHEDULE_ACTIONS_NOTE } from '../constants/schedule';
-import { coolingCount, hasSession } from '../helpers/session';
+import { coolingCount, hasIdlingGames } from '../helpers/session';
 import { useScheduleActions } from '../hooks/use-schedule-actions';
 import { EndCooldownsDialog } from './end-cooldowns-dialog';
 
 export function ScheduleActions() {
   const canMutate = useCanMutate();
-  const session = useDaemonState(hasSession) ?? false;
+  const session = useDaemonState(hasIdlingGames) ?? false;
   const enabled = useDaemonState((snapshot) => snapshot.settings.schedule.enabled) ?? true;
   const cooling = useDaemonState(coolingCount) ?? 0;
   const { reroll, endAll } = useScheduleActions();
   const available = canMutate && session;
 
   return (
-    <div className="flex flex-col gap-2">
+    <>
       <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"
@@ -33,6 +33,6 @@ export function ScheduleActions() {
         />
       </div>
       <p className="max-w-prose text-sm text-muted-foreground">{SCHEDULE_ACTIONS_NOTE}</p>
-    </div>
+    </>
   );
 }

@@ -2,14 +2,14 @@ import { RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useRefreshLibrary } from '@/hooks/use-refresh-library';
 import { LibraryUpdated } from './library-updated';
-import { SettingsSection } from './settings-section';
+import { SettingsBlock } from './settings-block';
 
-export function LibrarySection() {
+export function LibraryBlock() {
   const library = useRefreshLibrary();
   return (
-    <SettingsSection
+    <SettingsBlock
       title="Library"
-      description="steamidled reads your games when it signs in. Refresh after you buy or receive a game."
+      description="Updated automatically when Steam reports new games."
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <Button variant="outline" disabled={library.disabled} pending={library.refreshing} onClick={library.refresh}>
@@ -18,6 +18,6 @@ export function LibrarySection() {
         </Button>
         <LibraryUpdated />
       </div>
-    </SettingsSection>
+    </SettingsBlock>
   );
 }

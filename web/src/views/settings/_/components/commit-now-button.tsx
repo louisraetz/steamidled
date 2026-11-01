@@ -1,18 +1,16 @@
 import { Button } from '@/components/ui/button';
 import { useCanMutate } from '@/hooks/use-can-mutate';
 import { useDaemonState } from '@/hooks/use-daemon-state';
-import { canCommitPlaytime, canRetry } from '../helpers/session';
+import { canCommitPlaytime } from '../helpers/session';
 import { useSessionActions } from '../hooks/use-session-actions';
-import { RetryNowButton } from './retry-now-button';
 
-export function SessionActions() {
+export function CommitNowButton() {
   const canMutate = useCanMutate();
   const committable = useDaemonState(canCommitPlaytime) ?? false;
-  const retryable = useDaemonState(canRetry) ?? false;
-  const { commit, retry } = useSessionActions();
+  const { commit } = useSessionActions();
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div>
       <Button
         variant="outline"
         disabled={!canMutate || !committable}
@@ -21,12 +19,6 @@ export function SessionActions() {
       >
         Commit playtime now
       </Button>
-      <RetryNowButton
-        visible={retryable}
-        disabled={!canMutate}
-        pending={retry.isPending}
-        onClick={() => retry.mutate()}
-      />
     </div>
   );
 }
