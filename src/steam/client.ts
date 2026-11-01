@@ -13,6 +13,13 @@ const PERSONA_VALUES: Record<PersonaState, Parameters<SteamUser['setPersona']>[0
   offline: SteamUser.EPersonaState.Offline,
 };
 
+function signatureOf(licenses: { package_id: number }[]): string {
+  return licenses
+    .map((license) => license.package_id)
+    .sort((a, b) => a - b)
+    .join(',');
+}
+
 export class SteamClient {
   private client: SteamUser;
   private _isLoggedIn = false;
@@ -29,12 +36,18 @@ export class SteamClient {
   private _refreshTokenHandler: ((refreshToken: string) => void) | null = null;
   private _pendingLogonReject: ((err: Error) => void) | null = null;
   private _personaState: PersonaState = 'online';
+  private _licenseInfoPending = false;
 
   constructor() {
     this.client = new SteamUser({ enablePicsCache: true });
 
     this.client.on('ownershipCached', () => {
       this._ownershipCached = true;
+      this._licenseInfoPending = false;
+    });
+
+    this.client.on('licenses', () => {
+      this._licenseInfoPending = true;
     });
 
     this.client.on('loggedOn', () => {
@@ -110,6 +123,26 @@ export class SteamClient {
 
   get licensesReady(): boolean {
     return this.client.licenses != null && this._ownershipCacheComplete;
+  }
+
+  get licenseSignature(): string | null {
+    const { licenses } = this.client;
+    return licenses ? signatureOf(licenses) : null;
+  }
+
+  waitForLicenseInfo(timeoutMs: number): Promise<boolean> {
+    if (!this._licenseInfoPending) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const onCached = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        this.client.removeListener('ownershipCached', onCached);
+        resolve(false);
+      }, timeoutMs);
+      this.client.once('ownershipCached', onCached);
+    });
   }
 
   get currentRefreshToken(): string | null {
@@ -382,6 +415,10 @@ export class SteamClient {
 
   onRefreshToken(callback: (refreshToken: string) => void): void {
     this._refreshTokenHandler = callback;
+  }
+
+  onLicenses(callback: (signature: string) => void): void {
+    this.client.on('licenses', (licenses) => callback(signatureOf(licenses)));
   }
 
   onLoggedOn(callback: () => void): void {

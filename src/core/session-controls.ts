@@ -1,8 +1,8 @@
 import { log } from '../logging/logger.js';
 import { describeSettingsChange } from '../settings/describe.js';
-import type { PersonaState, Settings, SettingsPatch } from '../settings/schema.js';
+import { SCHEDULE_PROFILES, type PersonaState, type Settings, type SettingsPatch } from '../settings/schema.js';
 import type { SettingsUpdate } from '../storage/settings.js';
-import type { SteamGame } from '../types/index.js';
+import type { FetchedLibrary, SteamGame } from '../types/index.js';
 import { countLabel } from '../utils/format.js';
 
 export type RetryNowResult =
@@ -14,6 +14,11 @@ export type FlushNowResult =
   | { ok: true }
   | { ok: false; reason: 'busy' }
   | { ok: false; reason: 'too-soon'; waitMs: number };
+
+export interface LibraryChange {
+  added: number;
+  removed: number;
+}
 
 export interface SessionControlsAccess {
   resume: {
@@ -32,9 +37,10 @@ export interface SessionControlsAccess {
   };
   library: {
     generation(): number;
-    fetch(): Promise<SteamGame[] | null>;
+    appIds(): number[];
+    fetch(): Promise<FetchedLibrary | null>;
     licensesReady(): boolean;
-    apply(games: SteamGame[]): void;
+    apply(library: FetchedLibrary): void;
     refreshing(): boolean;
     setRefreshing(refreshing: boolean): void;
   };
@@ -48,6 +54,7 @@ export interface SessionControlsAccess {
   settings: {
     update(patch: SettingsPatch): SettingsUpdate;
     rerollIdlePhases(): void;
+    rerollAll(): number;
     applyWatchdog(enabled: boolean): void;
     setPersona(state: PersonaState): void;
     rearmDailyReport(): void;
@@ -98,27 +105,40 @@ export function createSessionControls(access: SessionControlsAccess) {
     session.keepOnly(remaining);
   }
 
-  async function reloadLibrary(): Promise<void> {
+  function libraryChange(before: Set<number>, games: SteamGame[]): LibraryChange {
+    const after = new Set(games.map((game) => game.appid));
+    return {
+      added: [...after].filter((appId) => !before.has(appId)).length,
+      removed: [...before].filter((appId) => !after.has(appId)).length,
+    };
+  }
+
+  async function reloadLibrary(): Promise<LibraryChange | null> {
     const { library } = access;
-    const games = await library.fetch();
-    if (!games) return;
+    const fetched = await library.fetch();
+    if (!fetched) return null;
     if (!library.licensesReady()) {
       log.warn('steam', "Steam hasn't sent the full license list yet, kept the current library and every idling game", {
         hint: 'Refresh again in a minute.',
       });
-      return;
+      return null;
     }
-    library.apply(games);
+    const before = new Set(library.appIds());
+    library.apply(fetched);
     dropVanishedGames();
+    return libraryChange(before, fetched.games);
   }
 
-  function refreshLibrary(): boolean {
+  function startRefresh(onChange?: (change: LibraryChange) => void): boolean {
     const { library } = access;
     if (library.refreshing()) return false;
     library.setRefreshing(true);
     const generation = library.generation();
     access.stateChanged();
     void reloadLibrary()
+      .then((change) => {
+        if (change) onChange?.(change);
+      })
       .catch((err: unknown) => {
         log.warn('steam', "Couldn't refresh the library", {
           cause: err,
@@ -133,8 +153,27 @@ export function createSessionControls(access: SessionControlsAccess) {
     return true;
   }
 
+  function refreshLibrary(): boolean {
+    return startRefresh();
+  }
+
+  function refreshLibraryAutomatically(): boolean {
+    return startRefresh(({ added, removed }) => {
+      log.info('steam', `Library updated automatically: +${added} / -${removed} games`);
+    });
+  }
+
+  function applyProfileChange(previous: Settings, next: Settings): void {
+    const { profile } = next.schedule;
+    if (profile === previous.schedule.profile || profile === 'custom') return;
+    const rerolled = next.schedule.enabled ? access.settings.rerollAll() : 0;
+    const label = SCHEDULE_PROFILES[profile].label;
+    log.info('idle', rerolled > 0 ? `Schedule profile set to ${label}, all games rerolled` : `Schedule profile set to ${label}`);
+  }
+
   function applySettingsChange(previous: Settings, next: Settings): void {
     const { settings } = access;
+    applyProfileChange(previous, next);
     if (!previous.schedule.enabled && next.schedule.enabled) settings.rerollIdlePhases();
     if (previous.flushIntervalHours !== next.flushIntervalHours) access.flush.rearm();
     if (previous.watchdog !== next.watchdog) settings.applyWatchdog(next.watchdog);
@@ -152,5 +191,5 @@ export function createSessionControls(access: SessionControlsAccess) {
     return result;
   }
 
-  return { retryNow, flushNow, refreshLibrary, updateSettings };
+  return { retryNow, flushNow, refreshLibrary, refreshLibraryAutomatically, updateSettings };
 }

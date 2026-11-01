@@ -49,6 +49,7 @@ declare module 'steam-user' {
     playingState: (blocked: boolean, playingApp: number) => void;
     refreshToken: (refreshToken: string) => void;
     ownershipCached: () => void;
+    licenses: (licenses: License[]) => void;
   }
 
   interface OwnedAppsOptions {

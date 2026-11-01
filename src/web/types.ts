@@ -1,4 +1,4 @@
-import type { Settings } from '../settings/schema.js';
+import type { ScheduleRanges, Settings } from '../settings/schema.js';
 
 export type Phase = 'needs-login' | 'signing-in' | 'loading-library' | 'ready' | 'idling' | 'error';
 
@@ -81,6 +81,7 @@ export interface DaemonSnapshot {
   libraryUpdatedAt: number | null;
   todayStartedAt: number | null;
   settings: Settings;
+  effectiveSchedule: ScheduleRanges;
   games: IdlingGameSnapshot[];
   nextRetryAt: number | null;
   loginError: { title: string; message: string } | null;

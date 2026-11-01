@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { writeFileAtomic } from './atomicWrite.js';
 import { log } from '../logging/logger.js';
 import {
+  customRanges,
   mergeSettings,
   parseStoredSettings,
   settingsSchema,
@@ -34,12 +35,19 @@ function readSettingsFile(): Settings {
     });
     return parseStoredSettings({}).settings;
   }
-  const { settings, invalidFields } = parseStoredSettings(raw);
+  const { settings, invalidFields, legacySchedule } = parseStoredSettings(raw);
   for (const field of invalidFields) {
     log.warn('storage', `Invalid "${field}" in ${SETTINGS_PATH}, using the default`, {
       hint: 'Fix the value in the file, or change the setting in the web GUI.',
       interactive: () => console.error(`Invalid "${field}" in ${SETTINGS_PATH}, using the default.`),
     });
+  }
+  const ranges = customRanges(settings.schedule);
+  if (legacySchedule && ranges) {
+    log.info(
+      'storage',
+      `${SETTINGS_PATH} has no schedule profile, it keeps its old rhythm as Custom: idle ${ranges.idleMinHours}–${ranges.idleMaxHours}h, cooldown ${ranges.cooldownMinHours}–${ranges.cooldownMaxHours}h`
+    );
   }
   return settings;
 }

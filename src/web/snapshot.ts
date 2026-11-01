@@ -1,3 +1,4 @@
+import { effectiveSchedule } from '../settings/schema.js';
 import type { IdlingGame } from '../types/index.js';
 import type { ControllerState, EngineState } from './engine.js';
 import type { Connection, DaemonSnapshot, GameStatus, IdlingGameSnapshot, Phase } from './types.js';
@@ -97,6 +98,7 @@ export function buildSnapshot(
     libraryUpdatedAt: engine.libraryUpdatedAt,
     todayStartedAt: engine.startTime ? engine.dayStartedAt : null,
     settings: engine.settings,
+    effectiveSchedule: effectiveSchedule(engine.settings),
     games,
     nextRetryAt: controller.nextRetryAt,
     loginError: controller.loginError,

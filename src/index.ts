@@ -26,8 +26,10 @@ import {
 import { loadFavorites, loadExempt, saveFavorites, saveExempt } from './storage/favorites.js';
 import { loadCredentials, saveCredentials } from './storage/credentials.js';
 import { getSettings, updateSettings } from './storage/settings.js';
+import { effectiveSchedule } from './settings/schema.js';
 import { createSchedule } from './core/schedule.js';
 import { createSessionControls } from './core/session-controls.js';
+import { createLibraryWatch } from './core/library-watch.js';
 import { TelegramNotifier, saveTelegramDisabled } from './notifications/telegram.js';
 import { runTelegramSetup } from './notifications/telegramSetup.js';
 import { dayBefore, formatDailyReport, formatReportTime, reportPeriodLabel } from './notifications/dailyReport.js';
@@ -44,7 +46,7 @@ import {
 import { createSpinner } from './ui/spinner.js';
 import { log } from './logging/logger.js';
 import { countLabel, formatDuration, formatWait } from './utils/format.js';
-import type { SteamGame, GameSelection, IdlingGame, LoginResult } from './types/index.js';
+import type { SteamGame, GameSelection, IdlingGame, LoginResult, FetchedLibrary } from './types/index.js';
 import type { Engine, EngineState, ResumeInfo, ResumeKind, SessionStart, WebBridge } from './web/engine.js';
 
 const KNOWN_FLAGS = [
@@ -82,6 +84,9 @@ const CRASH_FLUSH_GRACE_MS = 2000;
 const ABORT_SETTLE_MS = 5000;
 const SHUTDOWN_FLUSH_GRACE_MS = 1500;
 const TAKEOVER_DRIFT_DELAY_MS = 120_000;
+const LIBRARY_WATCH_DEBOUNCE_MS = 15_000;
+const LIBRARY_WATCH_MIN_GAP_MS = 5 * 60_000;
+const LIBRARY_WATCH_READY_TIMEOUT_MS = 60_000;
 
 const client = new SteamClient();
 const telegram = new TelegramNotifier();
@@ -133,6 +138,7 @@ let lastRelogAt = 0;
 let libraryVersion = 0;
 let libraryRefreshing = false;
 let libraryUpdatedAt: number | null = null;
+let libraryLicenses: string | null = null;
 let webBridge: WebBridge | null = null;
 const processStartedAt = Date.now();
 
@@ -203,12 +209,12 @@ function randomHoursMs(minHours: number, maxHours: number): number {
 }
 
 function randomIdlePhaseMs(): number {
-  const { idleMinHours, idleMaxHours } = getSettings().schedule;
+  const { idleMinHours, idleMaxHours } = effectiveSchedule(getSettings());
   return randomHoursMs(idleMinHours, idleMaxHours);
 }
 
 function randomCooldownMs(): number {
-  const { cooldownMinHours, cooldownMaxHours } = getSettings().schedule;
+  const { cooldownMinHours, cooldownMaxHours } = effectiveSchedule(getSettings());
   return randomHoursMs(cooldownMinHours, cooldownMaxHours);
 }
 
@@ -1285,6 +1291,8 @@ function ensureClientWiring(): void {
     enterWaitingState(reason, isTakeover);
   });
 
+  client.onLicenses((signature) => libraryWatch.licensesChanged(signature));
+
   client.onLoggedOn(() => {
     if (!sessionLive) return;
     if (isWaitingForResume) {
@@ -1332,6 +1340,8 @@ function resetSession(): void {
   resumeInfo = null;
   rateLimitedAt = 0;
   libraryRefreshing = false;
+  libraryLicenses = null;
+  libraryWatch.cancel();
   idlingGames = [];
   pausedGames = [];
   pausingGames = [];
@@ -1497,13 +1507,15 @@ function webBeginSession(name: string): SessionStart {
   return 'fresh';
 }
 
-async function fetchLibrary(): Promise<SteamGame[] | null> {
+async function fetchLibrary(): Promise<FetchedLibrary | null> {
   const generation = sessionGeneration;
+  const licenses = client.licenseSignature;
   const games = await client.getOwnedGames();
-  return generation === sessionGeneration ? games : null;
+  if (generation !== sessionGeneration) return null;
+  return { games, licenses: licenses ?? client.licenseSignature };
 }
 
-function applyLibrary(games: SteamGame[]): void {
+function applyLibrary({ games, licenses }: FetchedLibrary): void {
   allGames = games;
   gamesById = new Map(games.map((g) => [g.appid, g]));
   favoriteIds = loadFavorites(accountName);
@@ -1511,15 +1523,17 @@ function applyLibrary(games: SteamGame[]): void {
   libraryLoaded = true;
   libraryVersion += 1;
   libraryUpdatedAt = Date.now();
+  libraryLicenses = licenses;
   log.info('steam', `Library loaded: ${countLabel(games.length, 'game')}`);
   notifyChange();
+  libraryWatch.libraryApplied();
 }
 
 async function webLoadLibrary(): Promise<number | null> {
-  const games = await fetchLibrary();
-  if (!games) return null;
-  applyLibrary(games);
-  return games.length;
+  const library = await fetchLibrary();
+  if (!library) return null;
+  applyLibrary(library);
+  return library.games.length;
 }
 
 function webRetryResume(): void {
@@ -1582,6 +1596,7 @@ const controls = createSessionControls({
   },
   library: {
     generation: () => sessionGeneration,
+    appIds: () => allGames.map((game) => game.appid),
     fetch: fetchLibrary,
     licensesReady: () => client.licensesReady,
     apply: applyLibrary,
@@ -1605,6 +1620,7 @@ const controls = createSessionControls({
   settings: {
     update: updateSettings,
     rerollIdlePhases: () => schedule.rerollIdlePhases(),
+    rerollAll: () => schedule.rerollAll(),
     applyWatchdog,
     setPersona: (state) => client.setPersonaState(state),
     rearmDailyReport,
@@ -1612,6 +1628,18 @@ const controls = createSessionControls({
   rateLimitWaitMs: RATE_LIMIT_MIN_WAIT_MS,
   manualFlushGapMs: MANUAL_FLUSH_MIN_GAP_MS,
   stateChanged: notifyChange,
+});
+
+const libraryWatch = createLibraryWatch({
+  generation: () => sessionGeneration,
+  isLive: () => sessionLive && libraryLoaded && !isWaitingForResume,
+  librarySignature: () => libraryLicenses,
+  currentSignature: () => client.licenseSignature,
+  waitForLicenseInfo: (timeoutMs) => client.waitForLicenseInfo(timeoutMs),
+  refresh: controls.refreshLibraryAutomatically,
+  debounceMs: LIBRARY_WATCH_DEBOUNCE_MS,
+  minGapMs: LIBRARY_WATCH_MIN_GAP_MS,
+  readyTimeoutMs: LIBRARY_WATCH_READY_TIMEOUT_MS,
 });
 
 function webStoredFavorites(): number[] {

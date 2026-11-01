@@ -8,6 +8,11 @@ export interface SteamGame {
   source: GameSource;
 }
 
+export interface FetchedLibrary {
+  games: SteamGame[];
+  licenses: string | null;
+}
+
 export interface StoredCredentials {
   accountName: string;
   refreshToken: string;

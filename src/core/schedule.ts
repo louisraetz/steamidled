@@ -138,12 +138,16 @@ export function createSchedule(access: ScheduleAccess) {
     return games.length;
   }
 
-  function rerollSchedules(): number {
+  function rerollAll(): number {
     const collecting = rerollIdlePhases();
     const now = Date.now();
     const cooling = access.pausing();
     for (const game of cooling) game.pauseUntil = new Date(now + access.randomCooldownMs());
-    const total = collecting + cooling.length;
+    return collecting + cooling.length;
+  }
+
+  function rerollSchedules(): number {
+    const total = rerollAll();
     commit(`New random schedule for ${total} ${total === 1 ? 'game' : 'games'}`, false);
     return total;
   }
@@ -161,6 +165,7 @@ export function createSchedule(access: ScheduleAccess) {
     setNextCooldownIn,
     setCooldownRemaining,
     rerollIdlePhases,
+    rerollAll,
     rerollSchedules,
     endAllCooldowns,
   };
