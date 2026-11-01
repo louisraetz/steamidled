@@ -12,11 +12,11 @@ interface PickerListProps {
 }
 
 export function PickerList({ results, listRef }: PickerListProps) {
-  const { filtered, roving, selection } = results;
+  const { filtered, roving, draft } = results;
 
   const renderRow = (game: LibraryGame, index: number) => {
     const total = rowTotal(game);
-    const added = selection.selectedSet.has(game.appid);
+    const added = draft.selectedSet.has(game.appid);
     return (
       <PickerRow
         key={game.appid}
@@ -30,9 +30,11 @@ export function PickerList({ results, listRef }: PickerListProps) {
         added={added}
         favorite={results.favoriteIds.has(game.appid)}
         exempt={results.exemptAppId === game.appid}
-        disabled={selection.locked || (selection.full && !added)}
+        disabled={draft.locked || (draft.full && !added)}
+        favoriteLocked={results.preferencesLocked}
         focusable={index === roving.focusedIndex}
-        onToggle={results.toggleGame}
+        onToggle={draft.toggle}
+        onToggleFavorite={results.toggleFavorite}
         onFocusRow={roving.setFocusedIndex}
       />
     );

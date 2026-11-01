@@ -1,11 +1,9 @@
 import { SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { useDaemonState } from '@/hooks/use-daemon-state';
 import { MAX_IDLE_GAMES } from '@/lib/constants';
 import { RefreshLibraryButton } from './refresh-library-button';
 import { SlotMeter } from './slot-meter';
 
-export function PickerHeader() {
-  const count = useDaemonState((snapshot) => snapshot.games.length) ?? 0;
+export function PickerHeader({ count }: { count: number }) {
   return (
     <SheetHeader>
       <div className="flex items-center gap-2">

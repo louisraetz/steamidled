@@ -1,7 +1,5 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 import { useGamePreferences } from '@/hooks/use-game-preferences';
-import { useSelection } from '@/hooks/use-selection';
-import { useStableCallback } from '@/hooks/use-stable-callback';
 import type { LibraryGame } from '@/lib/types';
 import { filterGames } from '../helpers/filter-games';
 import { pickerNotice } from '../helpers/picker-notice';
@@ -10,7 +8,7 @@ import { useRovingList } from './use-roving-list';
 
 export function usePickerResults(games: LibraryGame[], sheet: PickerSheet) {
   const preferences = useGamePreferences();
-  const selection = useSelection();
+  const { draft } = sheet;
   const query = useDeferredValue(sheet.query);
   const groupKey = `${sheet.filter}:${query}`;
   const [grouping, setGrouping] = useState(() => ({ key: groupKey, favorites: new Set(preferences.favorites) }));
@@ -28,16 +26,16 @@ export function usePickerResults(games: LibraryGame[], sheet: PickerSheet) {
     onExempt: (index) => preferences.toggleExempt(ordered[index].appid),
     onLeaveTop: () => sheet.searchRef.current?.focus(),
   });
-  const toggleGame = useStableCallback(selection.toggle);
 
   return {
     filtered,
     empty: ordered.length === 0,
     roving,
-    selection,
+    draft,
     favoriteIds: useMemo(() => new Set(preferences.favorites), [preferences.favorites]),
     exemptAppId: preferences.exemptAppId,
-    notice: pickerNotice(selection.lock, selection.full),
-    toggleGame,
+    preferencesLocked: preferences.locked,
+    toggleFavorite: preferences.toggleFavorite,
+    notice: pickerNotice(draft.lock, draft.full),
   };
 }

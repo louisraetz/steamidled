@@ -4,6 +4,7 @@ import { TOASTER_SELECTOR } from '../constants/picker';
 import { focusOpener } from '../helpers/focus-opener';
 import type { PickerSheet } from '../types/picker-sheet';
 import type { SourceFilter } from '../types/source-filter';
+import { usePickerDraft } from './use-picker-draft';
 
 export function usePickerSheet() {
   const open = usePickerStore((state) => state.open);
@@ -11,16 +12,35 @@ export function usePickerSheet() {
   const setOpen = usePickerStore((state) => state.setOpen);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<SourceFilter>('all');
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const draft = usePickerDraft();
 
   useEffect(() => () => setOpen(false), [setOpen]);
 
-  const changeOpen = (next: boolean) => {
-    setOpen(next);
-    if (next) return;
+  const close = () => {
+    setOpen(false);
     setQuery('');
     setFilter('all');
+    setConfirmingDiscard(false);
+    draft.reset();
+  };
+
+  const changeOpen = (next: boolean) => {
+    if (next) {
+      setOpen(true);
+      return;
+    }
+    if (draft.dirty) {
+      setConfirmingDiscard(true);
+      return;
+    }
+    close();
+  };
+
+  const apply = () => {
+    if (draft.apply()) close();
   };
 
   const onEscapeKeyDown = (event: KeyboardEvent) => {
@@ -44,10 +64,22 @@ export function usePickerSheet() {
     filter,
     searchRef,
     listRef,
+    draft,
     changeQuery: setQuery,
     changeFilter: setFilter,
     focusList: () => listRef.current?.querySelector<HTMLElement>('[data-row-index][tabindex="0"]')?.focus(),
   };
 
-  return { open, changeOpen, onEscapeKeyDown, onInteractOutside, onCloseAutoFocus, sheet };
+  return {
+    open,
+    changeOpen,
+    apply,
+    discard: close,
+    confirmingDiscard,
+    setConfirmingDiscard,
+    onEscapeKeyDown,
+    onInteractOutside,
+    onCloseAutoFocus,
+    sheet,
+  };
 }
