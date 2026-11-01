@@ -2,9 +2,10 @@ import type { ReactNode } from 'react';
 import { Infinity as InfinityIcon, Star } from 'lucide-react';
 import { useGamePreferences } from '@/hooks/use-game-preferences';
 import { useSelectionLock } from '@/hooks/use-selection-lock';
-import { AUTO_START_TOOLTIP, NO_COOLDOWN_TOOLTIP } from '../constants/actions';
+import { AUTO_START_TOOLTIP } from '@/lib/constants';
+import { PreferenceToggle } from '@/components/preference-toggle';
+import { NO_COOLDOWN_TOOLTIP } from '../constants/actions';
 import { removeGame } from '../helpers/remove-game';
-import { PreferenceToggle } from './preference-toggle';
 import { RemoveGameButton } from './remove-game-button';
 
 interface GameActionsProps {

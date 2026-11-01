@@ -2,7 +2,7 @@ import type { ComponentType } from 'react';
 import { cn } from '@/lib/utils';
 import { Toggle } from '@/components/ui/toggle';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { FILL_WHEN_ON, STROKE_WIDTH, TONE_WHEN_ON } from '../constants/actions';
+import { FILL_WHEN_ON, STROKE_WIDTH, TONE_WHEN_ON } from './_/constants/preference-toggle';
 
 interface PreferenceToggleProps {
   icon: ComponentType<{ className?: string; strokeWidth?: number }>;
@@ -12,10 +12,21 @@ interface PreferenceToggleProps {
   tooltip: string;
   pressed: boolean;
   disabled: boolean;
+  tabIndex?: number;
   onToggle: () => void;
 }
 
-export function PreferenceToggle({ icon: Icon, filled = false, tone, label, tooltip, pressed, disabled, onToggle }: PreferenceToggleProps) {
+export function PreferenceToggle({
+  icon: Icon,
+  filled = false,
+  tone,
+  label,
+  tooltip,
+  pressed,
+  disabled,
+  tabIndex,
+  onToggle,
+}: PreferenceToggleProps) {
   return (
     <span data-on={pressed} className="group/pref inline-flex">
       <Tooltip>
@@ -26,6 +37,7 @@ export function PreferenceToggle({ icon: Icon, filled = false, tone, label, tool
             aria-label={label}
             pressed={pressed}
             disabled={disabled}
+            tabIndex={tabIndex}
             onPressedChange={onToggle}
           >
             <Icon

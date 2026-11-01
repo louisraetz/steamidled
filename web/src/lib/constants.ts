@@ -18,6 +18,7 @@ export const SELECTION_BATCH_MS = 800;
 export const UNDO_DURATION_MS = 5000;
 export const SELECTION_ERROR_PREFIX = "Couldn't update the games.";
 export const AUTO_START_SAVE_ERROR = "Couldn't save the auto-start games. Check that ~/.steam-idler is writable.";
+export const AUTO_START_TOOLTIP = 'Start this game automatically when steamidled starts';
 export const NO_COOLDOWN_SAVE_ERROR = "Couldn't save the no-cooldown game. Check that ~/.steam-idler is writable.";
 export const PICKER_TOASTER_ID = 'picker';
 export const DESKTOP_MEDIA_QUERY = '(min-width: 1024px)';
