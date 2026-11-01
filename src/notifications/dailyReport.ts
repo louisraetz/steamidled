@@ -1,18 +1,18 @@
 import type { IdlingGame } from '../types/index.js';
+import { pad2 } from '../utils/format.js';
 
 export function formatDailyReport(
   idling: IdlingGame[],
   paused: IdlingGame[],
   cooling: IdlingGame[],
   dayStartAccumulatedMs: Map<number, number>,
-  date: Date,
+  periodLabel: string,
   isFrozen = false,
   nowMs = Date.now()
 ): string {
   const now = nowMs;
-  const dateStr = date.toLocaleDateString('en-CA');
   const lines: string[] = [];
-  lines.push(`📊 Daily idling report — ${dateStr}`);
+  lines.push(`📊 Daily idling report — ${periodLabel}`);
 
   const all = [...idling, ...paused, ...cooling];
   const exempt = all.find((g) => g.nextPauseAtMs === null);
@@ -79,4 +79,19 @@ function formatRemaining(ms: number): string {
   if (totalMinutes >= 24 * 60) return `${Math.floor(totalMinutes / (24 * 60))}d`;
   if (totalMinutes >= 60) return `${Math.floor(totalMinutes / 60)}h`;
   return `${totalMinutes}m`;
+}
+
+export function dayBefore(time: number): Date {
+  const date = new Date(time);
+  date.setDate(date.getDate() - 1);
+  return date;
+}
+
+export function formatReportTime(date: Date): string {
+  return `${date.toLocaleDateString('en-CA')} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+export function reportPeriodLabel(windowStart: Date, reportHour: number): string {
+  if (reportHour === 0) return windowStart.toLocaleDateString('en-CA');
+  return `since ${formatReportTime(windowStart)}`;
 }

@@ -3,15 +3,39 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileAtomic } from '../storage/atomicWrite.js';
 import { log } from '../logging/logger.js';
+import type { TelegramNotifyKind, TelegramNotifyPrefs } from '../web/types.js';
 
 const CONFIG_DIR = join(homedir(), '.steam-idler');
 const CONFIG_PATH = join(CONFIG_DIR, 'telegram.json');
+
+const SEND_TIMEOUT_MS = 5000;
+export const TEST_MESSAGE = '🧪 steamidled test message';
+
+export const DEFAULT_NOTIFY_PREFS: TelegramNotifyPrefs = {
+  lifecycle: true,
+  pauseResume: true,
+  flush: true,
+  zombie: true,
+  dailyReport: true,
+};
 
 export interface TelegramConfig {
   token?: string;
   chatId?: string;
   chatLabel?: string;
   disabled?: boolean;
+  notify?: Partial<TelegramNotifyPrefs>;
+}
+
+export interface SendResult {
+  ok: boolean;
+  status: number | null;
+}
+
+export type NotifyPrefsUpdate = 'saved' | 'not-connected' | 'unwritable';
+
+export function sendTestMessage(): Promise<SendResult> {
+  return new TelegramNotifier().sendChecked(TEST_MESSAGE);
 }
 
 function ensureConfigDir(): void {
@@ -46,8 +70,31 @@ export function writeTelegramConfig(config: TelegramConfig): boolean {
   }
 }
 
+export function notifyPrefsOf(config: TelegramConfig | null): TelegramNotifyPrefs {
+  const stored = config?.notify ?? {};
+  return {
+    lifecycle: stored.lifecycle !== false,
+    pauseResume: stored.pauseResume !== false,
+    flush: stored.flush !== false,
+    zombie: stored.zombie !== false,
+    dailyReport: stored.dailyReport !== false,
+  };
+}
+
+export function withStoredNotify(config: TelegramConfig): TelegramConfig {
+  const notify = loadTelegramConfig()?.notify;
+  return notify ? { ...config, notify } : config;
+}
+
 export function saveTelegramDisabled(): boolean {
-  return writeTelegramConfig({ disabled: true });
+  return writeTelegramConfig(withStoredNotify({ disabled: true }));
+}
+
+export function setNotifyPrefs(partial: Partial<TelegramNotifyPrefs>): NotifyPrefsUpdate {
+  const config = loadTelegramConfig();
+  if (!config?.token || !config.chatId || config.disabled) return 'not-connected';
+  const notify = { ...notifyPrefsOf(config), ...partial };
+  return writeTelegramConfig({ ...config, notify }) ? 'saved' : 'unwritable';
 }
 
 export class TelegramNotifier {
@@ -69,15 +116,40 @@ export class TelegramNotifier {
     return this.config !== null;
   }
 
-  send(text: string): Promise<void> {
-    if (!this.isConfigured()) return Promise.resolve();
+  notifyPrefs(): TelegramNotifyPrefs {
+    return notifyPrefsOf(this.config);
+  }
+
+  private post(text: string): Promise<Response> {
     const { token, chatId } = this.config!;
     return fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text }),
-      signal: AbortSignal.timeout(5000),
-    })
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+  }
+
+  async sendChecked(text: string): Promise<SendResult> {
+    if (!this.isConfigured()) return { ok: false, status: null };
+    try {
+      const res = await this.post(text);
+      if (!res.ok) {
+        log.warn('telegram', `Send rejected: HTTP ${res.status}`, {
+          hint: 'Check the bot token and chat id in Settings or with --setup-telegram.',
+        });
+      }
+      return { ok: res.ok, status: res.status };
+    } catch (err) {
+      log.warn('telegram', 'Send failed', { cause: err, hint: "Check the server's internet connection." });
+      return { ok: false, status: null };
+    }
+  }
+
+  send(text: string, kind: TelegramNotifyKind): Promise<void> {
+    if (!this.isConfigured()) return Promise.resolve();
+    if (kind !== 'critical' && !this.notifyPrefs()[kind]) return Promise.resolve();
+    return this.post(text)
       .then((res) => {
         if (!res.ok) {
           log.warn('telegram', `Send rejected: HTTP ${res.status}`, {

@@ -5,6 +5,14 @@ export function formatDuration(ms: number): string {
   return hours > 0 ? `${hours}h ${String(minutes).padStart(2, '0')}m` : `${minutes}m`;
 }
 
+export function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+export function formatHourOfDay(hour: number): string {
+  return `${pad2(hour)}:00`;
+}
+
 export function formatWait(ms: number): string {
   const totalSeconds = Math.max(1, Math.round(ms / 1000));
   if (totalSeconds < 60) return `${totalSeconds}s`;

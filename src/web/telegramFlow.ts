@@ -1,5 +1,11 @@
 import { log } from '../logging/logger.js';
-import { saveTelegramDisabled, type TelegramNotifier } from '../notifications/telegram.js';
+import {
+  saveTelegramDisabled,
+  sendTestMessage,
+  setNotifyPrefs,
+  type SendResult,
+  type TelegramNotifier,
+} from '../notifications/telegram.js';
 import {
   fetchChatId,
   readTelegramStatus,
@@ -12,7 +18,7 @@ import {
   type TelegramStatus,
 } from '../notifications/telegramSetup.js';
 import { CommandError } from './errors.js';
-import type { TelegramConfirmResult, TelegramSnapshot } from './types.js';
+import type { TelegramConfirmResult, TelegramNotifyPrefs, TelegramSnapshot } from './types.js';
 
 const OFF: TelegramStatus = { state: 'off', botUsername: null, chatLabel: null };
 
@@ -22,6 +28,21 @@ function unreachable(): CommandError {
 
 function unwritable(): CommandError {
   return new CommandError(500, "Couldn't save the Telegram settings.", 'Check that ~/.steam-idler is writable.');
+}
+
+function notConnected(): CommandError {
+  return new CommandError(409, 'Telegram is not connected.', 'Connect a bot first.');
+}
+
+function sendFailed(result: SendResult): CommandError {
+  if (result.status === null) {
+    return new CommandError(502, "Couldn't reach Telegram.", "Check the server's internet connection, then try again.");
+  }
+  return new CommandError(
+    502,
+    `Telegram rejected the message (HTTP ${result.status}).`,
+    'Check that the bot still exists and that you did not block it, or connect the bot again.'
+  );
 }
 
 export class TelegramFlow {
@@ -34,10 +55,41 @@ export class TelegramFlow {
   ) {}
 
   snapshot(): TelegramSnapshot {
+    const notify = this.notifier.notifyPrefs();
     if (this.pending) {
-      return { state: 'awaiting-start', botUsername: this.pending.botUsername, chatLabel: null };
+      return { state: 'awaiting-start', botUsername: this.pending.botUsername, chatLabel: null, notify };
     }
-    return this.status;
+    return { ...this.status, notify };
+  }
+
+  updateNotify(partial: Partial<TelegramNotifyPrefs>): void {
+    if (this.status.state !== 'connected' || this.pending) throw notConnected();
+    const result = setNotifyPrefs(partial);
+    if (result === 'not-connected') throw notConnected();
+    if (result === 'unwritable') throw unwritable();
+    this.notifier.reload();
+    log.info('telegram', 'Notification preferences saved');
+    this.onChange();
+  }
+
+  requireConnected(): void {
+    if (this.status.state !== 'connected' || this.pending || !this.notifier.isConfigured()) throw notConnected();
+  }
+
+  async sendTest(): Promise<void> {
+    this.requireConnected();
+    await this.deliver(sendTestMessage(), 'Test message sent');
+  }
+
+  async sendReport(report: string): Promise<void> {
+    this.requireConnected();
+    await this.deliver(this.notifier.sendChecked(report), 'Daily report sent on request');
+  }
+
+  private async deliver(sending: Promise<SendResult>, logMessage: string): Promise<void> {
+    const result = await sending;
+    if (!result.ok) throw sendFailed(result);
+    log.info('telegram', logMessage);
   }
 
   load(): void {

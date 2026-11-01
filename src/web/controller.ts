@@ -11,8 +11,10 @@ import { CommandError } from './errors.js';
 import { buildSnapshot, connectionOf, phaseOf } from './snapshot.js';
 import { createApp, startWebServer, stopWebServer } from './server.js';
 import { TelegramFlow } from './telegramFlow.js';
+import type { ScheduleRejection, ScheduleResult } from '../core/schedule.js';
+import type { SettingsPatch } from '../settings/schema.js';
 import type { ControllerPhase, ControllerState, Engine, WebBridge } from './engine.js';
-import type { DaemonSnapshot, LibraryGame, Phase, TelegramConfirmResult } from './types.js';
+import type { DaemonSnapshot, LibraryGame, Phase, TelegramConfirmResult, TelegramNotifyPrefs } from './types.js';
 
 const RETRY_COOLDOWN_MS = 60_000;
 const EXIT_CONFIG = 2;
@@ -34,6 +36,14 @@ interface ErrorInfo {
 }
 
 type ErrorSource = 'startup' | 'resume';
+
+const SCHEDULE_REJECTIONS: Record<ScheduleRejection, CommandError> = {
+  'not-in-session': new CommandError(404, 'This game is not idling right now.', 'Reload the page.'),
+  paused: new CommandError(409, 'This game is paused while you play it on another device.', 'It continues on its own when you stop playing.'),
+  exempt: new CommandError(409, 'Turn off No cooldown first.', 'This game skips cooldowns until you turn it off.'),
+  'not-collecting': new CommandError(409, 'This game is already cooling down.', 'Reload the page.'),
+  'not-cooling': new CommandError(409, 'This game is not cooling down.', 'Reload the page.'),
+};
 
 function eresultLabel(eresult: number): string {
   return SteamUser.EResult[eresult] ?? `eresult ${eresult}`;
@@ -240,13 +250,9 @@ export class WebController {
 
   retry(): Promise<DaemonSnapshot> {
     return this.enqueue(() => {
-      if (this.phase !== 'error') {
-        throw new CommandError(409, 'Nothing to retry.', null);
-      }
+      if (this.phase !== 'error') return this.retryResumeNow();
       const now = Date.now();
-      if (now - this.lastRetryAt < RETRY_COOLDOWN_MS) {
-        throw new CommandError(429, 'Wait a minute before trying again.', 'Steam blocks sign-ins that come too often.');
-      }
+      this.requireRetryCooldown(now);
       this.lastRetryAt = now;
       const epoch = this.renewEpoch();
       const source = this.errorSource;
@@ -262,6 +268,100 @@ export class WebController {
       }
       return this.snapshot();
     });
+  }
+
+  flushNow(): Promise<DaemonSnapshot> {
+    return this.enqueue(() => {
+      this.requireSession();
+      const result = this.engine.flushNow();
+      if (result.ok) return this.snapshot();
+      if (result.reason === 'too-soon') {
+        throw new CommandError(
+          429,
+          `Playtime was committed moments ago. Try again in ${formatWait(result.waitMs)}.`,
+          'Every commit reconnects to Steam, so steamidled spaces them out.'
+        );
+      }
+      throw new CommandError(
+        409,
+        'Playtime can be committed while games collect and Steam is connected.',
+        'Wait until the current reconnect is done.'
+      );
+    });
+  }
+
+  refreshLibrary(): Promise<DaemonSnapshot> {
+    return this.enqueue(() => {
+      this.requireSession();
+      this.requireConnected('The library can refresh once Steam is connected.');
+      if (!this.engine.refreshLibrary()) {
+        throw new CommandError(409, 'The library is already refreshing.', null);
+      }
+      return this.snapshot();
+    });
+  }
+
+  updateSettings(patch: SettingsPatch): Promise<DaemonSnapshot> {
+    return this.enqueue(() => {
+      const result = this.engine.updateSettings(patch);
+      if (result.ok) return this.snapshot();
+      if (result.reason === 'invalid') throw new CommandError(422, result.message, 'Adjust the value and try again.');
+      throw new CommandError(500, 'The settings file is not writable.', 'Check that ~/.steam-idler is writable.');
+    });
+  }
+
+  rerollSchedules(): Promise<DaemonSnapshot> {
+    return this.enqueue(() => {
+      this.requireSession();
+      this.engine.rerollSchedules();
+      return this.snapshot();
+    });
+  }
+
+  endAllCooldowns(): Promise<DaemonSnapshot> {
+    return this.enqueue(() => {
+      this.requireSession();
+      this.engine.endAllCooldowns();
+      return this.snapshot();
+    });
+  }
+
+  coolDownNow(appId: number, hours: number | null): Promise<DaemonSnapshot> {
+    return this.scheduleCommand(() => this.engine.coolDownNow(appId, hours));
+  }
+
+  endCooldownNow(appId: number): Promise<DaemonSnapshot> {
+    return this.scheduleCommand(() => this.engine.endCooldownNow(appId));
+  }
+
+  setNextCooldownIn(appId: number, hours: number): Promise<DaemonSnapshot> {
+    return this.scheduleCommand(() => this.engine.setNextCooldownIn(appId, hours));
+  }
+
+  setCooldownRemaining(appId: number, hours: number): Promise<DaemonSnapshot> {
+    return this.scheduleCommand(() => this.engine.setCooldownRemaining(appId, hours));
+  }
+
+  telegramNotify(partial: Partial<TelegramNotifyPrefs>): Promise<DaemonSnapshot> {
+    return this.enqueue(() => {
+      this.telegram.updateNotify(partial);
+      return this.snapshot();
+    });
+  }
+
+  async telegramTest(): Promise<DaemonSnapshot> {
+    await this.enqueue(() => this.telegram.requireConnected());
+    await this.telegram.sendTest();
+    return this.snapshot();
+  }
+
+  async telegramReport(): Promise<DaemonSnapshot> {
+    const report = await this.enqueue(() => {
+      this.telegram.requireConnected();
+      return this.engine.dailyReport();
+    });
+    await this.telegram.sendReport(report);
+    return this.snapshot();
   }
 
   telegramToken(token: string): Promise<DaemonSnapshot> {
@@ -309,6 +409,58 @@ export class WebController {
     if (phase !== 'ready' && phase !== 'idling') {
       throw new CommandError(409, 'Idling can change once the library is loaded.', 'Wait until the sign-in is done.');
     }
+  }
+
+  private requireConnected(message: string): void {
+    const connection = connectionOf(this.currentPhase(), this.engine.state(), Date.now());
+    if (connection.state !== 'connected') {
+      throw new CommandError(409, message, 'Wait until Steam is connected again.');
+    }
+  }
+
+  private requireRetryCooldown(now: number): void {
+    if (now - this.lastRetryAt < RETRY_COOLDOWN_MS) {
+      throw new CommandError(429, 'Wait a minute before trying again.', 'Steam blocks sign-ins that come too often.');
+    }
+  }
+
+  private retryResumeNow(): DaemonSnapshot {
+    const phase = this.currentPhase();
+    if (phase !== 'ready' && phase !== 'idling') throw new CommandError(409, 'Nothing to retry.', null);
+    const now = Date.now();
+    this.requireRetryCooldown(now);
+    const result = this.engine.retryNow();
+    if (result.ok) {
+      this.lastRetryAt = now;
+      return this.snapshot();
+    }
+    if (result.reason === 'rate-limited') {
+      throw new CommandError(
+        429,
+        `Steam is rate limiting sign-ins. Try again in ${formatWait(result.waitMs)}.`,
+        'Every early sign-in extends the lockout.'
+      );
+    }
+    if (result.reason === 'busy') {
+      throw new CommandError(409, 'A reconnect attempt is already running.', 'Wait a moment.');
+    }
+    if (result.reason === 'taken-over') {
+      throw new CommandError(
+        409,
+        'This account is in use on another device.',
+        'steamidled takes the session back on its own in a few minutes.'
+      );
+    }
+    throw new CommandError(409, 'Nothing to retry.', null);
+  }
+
+  private scheduleCommand(command: () => ScheduleResult): Promise<DaemonSnapshot> {
+    return this.enqueue(() => {
+      this.requireSession();
+      const result = command();
+      if (!result.ok) throw SCHEDULE_REJECTIONS[result.reason];
+      return this.snapshot();
+    });
   }
 
   private requireApplyAllowed(): void {

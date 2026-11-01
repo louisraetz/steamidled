@@ -10,6 +10,7 @@ export function stateRoutes(controller: WebController): Hono {
   return new Hono()
     .get('/api/state', (c) => c.json(controller.snapshot()))
     .post('/api/retry', async (c) => c.json(await controller.retry()))
+    .post('/api/session/flush-now', async (c) => c.json(await controller.flushNow()))
     .get('/api/events', (c) => {
       c.header('X-Accel-Buffering', 'no');
       return streamSSE(c, async (stream) => {

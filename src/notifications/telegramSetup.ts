@@ -1,6 +1,6 @@
 import { input, password as passwordPrompt } from '@inquirer/prompts';
 import chalk from 'chalk';
-import { loadTelegramConfig, writeTelegramConfig } from './telegram.js';
+import { loadTelegramConfig, withStoredNotify, writeTelegramConfig } from './telegram.js';
 
 interface GetMeResponse {
   ok: boolean;
@@ -87,11 +87,13 @@ export async function fetchChatId(token: string): Promise<TelegramChatInfo | nul
 }
 
 export function saveTelegramConfig(config: { token: string; chatId: number; chatLabel?: string }): boolean {
-  return writeTelegramConfig({
-    token: config.token,
-    chatId: String(config.chatId),
-    chatLabel: config.chatLabel,
-  });
+  return writeTelegramConfig(
+    withStoredNotify({
+      token: config.token,
+      chatId: String(config.chatId),
+      chatLabel: config.chatLabel,
+    })
+  );
 }
 
 export async function sendTelegramConfirmation(token: string, chatId: number): Promise<void> {

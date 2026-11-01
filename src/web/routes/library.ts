@@ -5,6 +5,7 @@ import { exemptSchema, favoriteParamSchema, favoriteSchema, selectionSchema, val
 export function libraryRoutes(controller: WebController): Hono {
   return new Hono()
     .get('/api/library', (c) => c.json(controller.library()))
+    .post('/api/library/refresh', async (c) => c.json(await controller.refreshLibrary()))
     .put('/api/selection', validate('json', selectionSchema), async (c) => {
       const { appIds } = c.req.valid('json');
       return c.json(await controller.setSelection(appIds));

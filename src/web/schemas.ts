@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { MAX_IDLE_GAMES } from '../constants.js';
+import { cooldownHoursSchema, idleHoursSchema } from '../settings/schema.js';
 import { apiError } from './errors.js';
 
 const appIdSchema = z.number().int().positive();
@@ -15,6 +16,24 @@ export const selectionSchema = z
   .strict();
 
 export const favoriteParamSchema = z.object({ appid: z.coerce.number().int().positive() });
+
+export const gameParamSchema = favoriteParamSchema;
+
+export const coolDownNowSchema = z.object({ hours: cooldownHoursSchema.nullable() }).strict();
+
+export const cooldownRemainingSchema = z.object({ hours: cooldownHoursSchema }).strict();
+
+export const nextCooldownSchema = z.object({ hours: idleHoursSchema }).strict();
+
+export const telegramNotifySchema = z
+  .object({
+    lifecycle: z.boolean().optional(),
+    pauseResume: z.boolean().optional(),
+    flush: z.boolean().optional(),
+    zombie: z.boolean().optional(),
+    dailyReport: z.boolean().optional(),
+  })
+  .strict();
 
 export const favoriteSchema = z.object({ favorite: z.boolean() }).strict();
 

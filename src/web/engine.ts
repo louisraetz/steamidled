@@ -1,5 +1,9 @@
+import type { ScheduleResult } from '../core/schedule.js';
+import type { FlushNowResult, RetryNowResult } from '../core/session-controls.js';
 import type { SteamClient } from '../steam/client.js';
 import type { TelegramNotifier } from '../notifications/telegram.js';
+import type { Settings, SettingsPatch } from '../settings/schema.js';
+import type { SettingsUpdate } from '../storage/settings.js';
 import type { IdlingGame, SteamGame } from '../types/index.js';
 import type { LoginFlowState, Phase, TelegramSnapshot } from './types.js';
 
@@ -29,9 +33,16 @@ export interface EngineState {
   playingBlocked: boolean;
   playingBlockedSince: number;
   resumeInfo: ResumeInfo | null;
+  libraryVersion: number;
+  libraryRefreshing: boolean;
+  libraryUpdatedAt: number | null;
+  dayStartedAt: number | null;
+  dayStartAccumulatedMs: ReadonlyMap<number, number>;
+  settings: Settings;
 }
 
 export type SessionStart = 'resumed' | 'fresh';
+
 
 export interface Engine {
   readonly client: SteamClient;
@@ -50,6 +61,17 @@ export interface Engine {
   setFavorite(appId: number, favorite: boolean): boolean;
   logout(): void;
   retryResume(): void;
+  retryNow(): RetryNowResult;
+  flushNow(): FlushNowResult;
+  refreshLibrary(): boolean;
+  updateSettings(patch: SettingsPatch): SettingsUpdate;
+  coolDownNow(appId: number, hours: number | null): ScheduleResult;
+  endCooldownNow(appId: number): ScheduleResult;
+  setNextCooldownIn(appId: number, hours: number): ScheduleResult;
+  setCooldownRemaining(appId: number, hours: number): ScheduleResult;
+  rerollSchedules(): number;
+  endAllCooldowns(): number;
+  dailyReport(): string;
 }
 
 export interface WebBridge {

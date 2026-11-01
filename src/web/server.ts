@@ -10,10 +10,12 @@ import { HTTPException } from 'hono/http-exception';
 import { log } from '../logging/logger.js';
 import { apiError, CommandError } from './errors.js';
 import { csrfGuard, hostAllowlist, HostPolicy } from './middleware.js';
+import { gameRoutes } from './routes/games.js';
 import { healthRoutes } from './routes/health.js';
 import { libraryRoutes } from './routes/library.js';
 import { loginRoutes } from './routes/login.js';
 import { logRoutes } from './routes/logs.js';
+import { settingsRoutes } from './routes/settings.js';
 import { stateRoutes } from './routes/state.js';
 import { telegramRoutes } from './routes/telegram.js';
 import type { WebController } from './controller.js';
@@ -60,6 +62,8 @@ export function createApp(controller: WebController): Hono {
   app.route('/', libraryRoutes(controller));
   app.route('/', loginRoutes(controller));
   app.route('/', telegramRoutes(controller));
+  app.route('/', settingsRoutes(controller));
+  app.route('/', gameRoutes(controller));
   app.all('/api/*', (c) => c.json(apiError('Unknown API route.', null), 404));
 
   mountStatic(app);

@@ -53,6 +53,7 @@ function gameSnapshot(
     game.nextPauseAtMs === null || status === 'cooldown'
       ? null
       : now + Math.max(0, game.nextPauseAtMs - gainedMs);
+  const todayGainedMs = Math.max(0, gainedMs - (engine.dayStartAccumulatedMs.get(game.appid) ?? 0));
   return {
     appid: game.appid,
     name: game.name,
@@ -64,6 +65,7 @@ function gameSnapshot(
     counting,
     cooldownUntil: game.pauseUntil ? game.pauseUntil.getTime() : null,
     cooldownAt,
+    todayGainedMs,
   };
 }
 
@@ -90,6 +92,11 @@ export function buildSnapshot(
     favoritesInLibrary: engine.favorites.filter((appid) => engine.gamesById.has(appid)).length,
     exemptAppId: engine.exemptAppId,
     libraryLoaded: engine.libraryLoaded,
+    libraryVersion: engine.libraryVersion,
+    libraryRefreshing: engine.libraryRefreshing,
+    libraryUpdatedAt: engine.libraryUpdatedAt,
+    todayStartedAt: engine.startTime ? engine.dayStartedAt : null,
+    settings: engine.settings,
     games,
     nextRetryAt: controller.nextRetryAt,
     loginError: controller.loginError,

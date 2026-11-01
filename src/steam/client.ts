@@ -2,10 +2,16 @@ import SteamUser from 'steam-user';
 import { LoginSession, EAuthTokenPlatformType } from 'steam-session';
 import { MAX_IDLE_GAMES } from '../constants.js';
 import { log } from '../logging/logger.js';
+import type { PersonaState } from '../settings/schema.js';
 import type { SteamGame } from '../types/index.js';
 
 const RECONNECT_PENDING_MAX_MS = 5 * 60 * 1000;
 const LOGON_TIMEOUT_MS = 2 * 60 * 1000;
+const PERSONA_VALUES: Record<PersonaState, Parameters<SteamUser['setPersona']>[0]> = {
+  online: SteamUser.EPersonaState.Online,
+  away: SteamUser.EPersonaState.Away,
+  offline: SteamUser.EPersonaState.Offline,
+};
 
 export class SteamClient {
   private client: SteamUser;
@@ -22,6 +28,7 @@ export class SteamClient {
   private _refreshToken: string | null = null;
   private _refreshTokenHandler: ((refreshToken: string) => void) | null = null;
   private _pendingLogonReject: ((err: Error) => void) | null = null;
+  private _personaState: PersonaState = 'online';
 
   constructor() {
     this.client = new SteamUser({ enablePicsCache: true });
@@ -33,7 +40,9 @@ export class SteamClient {
     this.client.on('loggedOn', () => {
       this._isLoggedIn = true;
       this._reconnectPending = false;
-      this.client.setPersona(SteamUser.EPersonaState.Online);
+      this._ownershipCached = false;
+      this._ownershipCachePromise = null;
+      this.client.setPersona(PERSONA_VALUES[this._personaState]);
       void this.renewRefreshToken();
     });
 
@@ -82,6 +91,11 @@ export class SteamClient {
     this._pendingLogonReject?.(new Error('Logon cancelled'));
   }
 
+  setPersonaState(state: PersonaState): void {
+    this._personaState = state;
+    if (this._isLoggedIn && this.isConnected) this.client.setPersona(PERSONA_VALUES[state]);
+  }
+
   get isPlayingBlocked(): boolean {
     return this._playingBlocked;
   }
@@ -92,6 +106,10 @@ export class SteamClient {
 
   get ownershipCacheComplete(): boolean {
     return this._ownershipCacheComplete;
+  }
+
+  get licensesReady(): boolean {
+    return this.client.licenses != null && this._ownershipCacheComplete;
   }
 
   get currentRefreshToken(): string | null {

@@ -1,3 +1,5 @@
+import type { Settings } from '../settings/schema.js';
+
 export type Phase = 'needs-login' | 'signing-in' | 'loading-library' | 'ready' | 'idling' | 'error';
 
 export type Connection =
@@ -23,6 +25,7 @@ export interface IdlingGameSnapshot {
   counting: boolean;
   cooldownUntil: number | null;
   cooldownAt: number | null;
+  todayGainedMs: number;
 }
 
 export type GuardType = 'email-code' | 'device-code' | 'device-confirmation' | 'email-confirmation';
@@ -44,10 +47,21 @@ export type LoginFlowState =
 
 export type TelegramState = 'off' | 'awaiting-start' | 'connected';
 
+export interface TelegramNotifyPrefs {
+  lifecycle: boolean;
+  pauseResume: boolean;
+  flush: boolean;
+  zombie: boolean;
+  dailyReport: boolean;
+}
+
+export type TelegramNotifyKind = keyof TelegramNotifyPrefs | 'critical';
+
 export interface TelegramSnapshot {
   state: TelegramState;
   botUsername: string | null;
   chatLabel: string | null;
+  notify: TelegramNotifyPrefs;
 }
 
 export interface DaemonSnapshot {
@@ -62,6 +76,11 @@ export interface DaemonSnapshot {
   favoritesInLibrary: number;
   exemptAppId: number | null;
   libraryLoaded: boolean;
+  libraryVersion: number;
+  libraryRefreshing: boolean;
+  libraryUpdatedAt: number | null;
+  todayStartedAt: number | null;
+  settings: Settings;
   games: IdlingGameSnapshot[];
   nextRetryAt: number | null;
   loginError: { title: string; message: string } | null;
