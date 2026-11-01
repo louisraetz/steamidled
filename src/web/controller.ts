@@ -616,7 +616,7 @@ export class WebController {
         if (!this.isCurrent(epoch) || count === null) return;
         this.nextRetryAt = null;
         this.phase = 'active';
-        this.engine.startFavorites();
+        this.engine.startRestoredOrFavorites();
         this.changed();
         return;
       } catch (err) {

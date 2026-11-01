@@ -25,6 +25,15 @@ import {
 } from './ui/display.js';
 import { loadFavorites, loadExempt, saveFavorites, saveExempt } from './storage/favorites.js';
 import { loadCredentials, saveCredentials } from './storage/credentials.js';
+import {
+  captureSession,
+  deleteSession,
+  loadSession,
+  restoreSchedule,
+  saveSession,
+  sessionKey,
+  type SavedSession,
+} from './storage/session.js';
 import { getSettings, updateSettings } from './storage/settings.js';
 import { effectiveSchedule } from './settings/schema.js';
 import { createSchedule } from './core/schedule.js';
@@ -87,6 +96,7 @@ const TAKEOVER_DRIFT_DELAY_MS = 120_000;
 const LIBRARY_WATCH_DEBOUNCE_MS = 15_000;
 const LIBRARY_WATCH_MIN_GAP_MS = 5 * 60_000;
 const LIBRARY_WATCH_READY_TIMEOUT_MS = 60_000;
+const SESSION_SAVE_INTERVAL_MS = 5 * 60_000;
 
 const client = new SteamClient();
 const telegram = new TelegramNotifier();
@@ -140,10 +150,28 @@ let libraryRefreshing = false;
 let libraryUpdatedAt: number | null = null;
 let libraryLicenses: string | null = null;
 let webBridge: WebBridge | null = null;
+let sessionRestored = false;
+let lastSessionKey = '';
+let lastSessionSavedAt = 0;
 const processStartedAt = Date.now();
 
 function notifyChange(): void {
+  persistSession();
   webBridge?.changed();
+}
+
+function persistSession(force = false): void {
+  if (!IS_WEB || !sessionRestored || !accountName || !libraryLoaded) return;
+  const games = sessionGames();
+  const scheduleEnabled = getSettings().schedule.enabled;
+  const key = sessionKey(games, scheduleEnabled);
+  const now = Date.now();
+  const due = games.length > 0 && (force || now - lastSessionSavedAt >= SESSION_SAVE_INTERVAL_MS);
+  if (key === lastSessionKey && !due) return;
+  if (!isFrozen()) bankElapsed(idlingGames, new Date(now));
+  lastSessionKey = key;
+  lastSessionSavedAt = now;
+  saveSession(accountName, captureSession(games, scheduleEnabled, now));
 }
 
 function bankElapsed(games: IdlingGame[], now = new Date()): void {
@@ -283,8 +311,11 @@ function silencePauseNotifications(): void {
 function announceIdlingStarted(): void {
   const exemptName = idlingGames.find((g) => g.nextPauseAtMs === null)?.name ?? null;
   const startedSuffix = exemptName ? ` (exempt: ${exemptName})` : '';
-  telegram.send(`▶️ Idling started — ${idlingGames.length} games${startedSuffix}`, 'lifecycle');
-  if (IS_WEB) log.info('idle', `Idling started with ${countLabel(idlingGames.length, 'game')}${startedSuffix}`);
+  const cooling = pausingGames.length;
+  const coolingSuffix = cooling > 0 ? `, ${cooling} cooling down` : '';
+  const total = idlingGames.length + cooling;
+  telegram.send(`▶️ Idling started — ${total} games${coolingSuffix}${startedSuffix}`, 'lifecycle');
+  if (IS_WEB) log.info('idle', `Idling started with ${countLabel(total, 'game')}${coolingSuffix}${startedSuffix}`);
 }
 
 function warnFavoritesOverLimit(count: number): void {
@@ -1354,6 +1385,7 @@ function resetSession(): void {
   gamesById = new Map();
   exemptAppId = null;
   libraryLoaded = false;
+  sessionRestored = false;
   favoriteIds = [];
   dayStartAccumulatedMs.clear();
   notifyChange();
@@ -1438,6 +1470,47 @@ function webStartFavorites(): number {
   return selected.length;
 }
 
+function webRestoreSession(saved: SavedSession): void {
+  if (saved.appIds.length === 0) {
+    log.info('idle', 'Idling was stopped before the restart, nothing to resume');
+    return;
+  }
+  const missing = saved.appIds.filter((appid) => !gamesById.has(appid));
+  if (missing.length > 0) {
+    log.warn('idle', `Skipped ${missing.length} game(s) missing from the library: ${missing.join(', ')}`, {
+      hint: 'Steam no longer lists them for this account. Add them again if they come back.',
+    });
+  }
+  const selection = selectionFromAppIds([...new Set(saved.appIds)]).slice(0, MAX_IDLE_GAMES);
+  if (selection.length === 0) return;
+  const settings = getSettings();
+  const options = {
+    now: Date.now(),
+    scheduleEnabled: settings.schedule.enabled,
+    maxIdleMs: effectiveSchedule(settings).idleMaxHours * HOURS_MS,
+  };
+  const games = selection.map((entry) =>
+    createIdlingGame(entry, gamesById.get(entry.appid), entry.appid === exemptAppId)
+  );
+  const cooling = games.filter((game) => restoreSchedule(game, saved.games[game.appid], options) === 'cooling');
+  idlingGames = games.filter((game) => !cooling.includes(game));
+  pausedGames = [];
+  pausingGames = cooling;
+  if (!isWaitingForResume) client.setGamesPlaying(idlingGames.map((g) => g.appid));
+  log.info('idle', `Restored the last selection: ${countLabel(games.length, 'game')}`);
+  ensureSessionTimers(true);
+  notifyChange();
+}
+
+function webStartRestoredOrFavorites(): void {
+  const saved = loadSession(accountName);
+  if (saved) webRestoreSession(saved);
+  else webStartFavorites();
+  sessionRestored = true;
+  lastSessionKey = sessionKey(sessionGames(), getSettings().schedule.enabled);
+  lastSessionSavedAt = Date.now();
+}
+
 function webSetExempt(appId: number | null): boolean {
   if (!saveExempt(accountName, appId)) return false;
   const appIds = sessionAppIds();
@@ -1475,6 +1548,8 @@ function webLogout(): void {
     client.abortPendingConnect();
   }
   client.logout();
+  const sessionAccount = accountName || loadCredentials()?.accountName;
+  if (sessionAccount) deleteSession(sessionAccount);
   clearCredentials();
   resetSession();
   log.info('steam', 'Logged out, the saved login was removed');
@@ -1690,6 +1765,7 @@ const engine: Engine = {
   beginSession: webBeginSession,
   loadLibrary: webLoadLibrary,
   startFavorites: webStartFavorites,
+  startRestoredOrFavorites: webStartRestoredOrFavorites,
   applySelection: webApplySelection,
   stop: webStop,
   setExempt: webSetExempt,
@@ -1745,6 +1821,7 @@ function handleShutdown(exitCode = 0): void {
     zombieTimer = null;
   }
   stopDisplayLoop();
+  persistSession(true);
 
   try {
     if (isIdling) {

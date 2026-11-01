@@ -55,6 +55,7 @@ export interface Engine {
   beginSession(accountName: string): SessionStart;
   loadLibrary(): Promise<number | null>;
   startFavorites(): number;
+  startRestoredOrFavorites(): void;
   applySelection(appIds: number[]): void;
   stop(): void;
   setExempt(appId: number | null): boolean;

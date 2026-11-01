@@ -14,8 +14,8 @@ export function StopIdlingDialogContent({ gameCount, onConfirm }: { gameCount: n
       <AlertDialogHeader>
         <AlertDialogTitle>Stop idling?</AlertDialogTitle>
         <AlertDialogDescription>
-          All {gameCount} games stop collecting playtime. You stay signed in, and auto-start games start again on the
-          next restart.
+          All {gameCount} games stop collecting playtime. You stay signed in, and steamidled stays stopped after a
+          restart.
         </AlertDialogDescription>
       </AlertDialogHeader>
       <AlertDialogFooter>
