@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" width="112" alt="steamidled logo" />
+</p>
+
 # steamidled 🎮💤
 
 [![npm version](https://img.shields.io/npm/v/@louisraetz/steamidled)](https://www.npmjs.com/package/@louisraetz/steamidled)
@@ -65,13 +69,15 @@ Automatically logs in and starts idling your favorited games (the first 32 if yo
 
 ### 📲 Telegram notifications (optional)
 
-Get pings when idling stops/resumes and a daily snapshot at local midnight.
+Get pings when idling stops/resumes and a daily snapshot (local midnight unless you pick another hour).
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and grab its token.
 2. The first time you run `steamidled` interactively, it'll ask if you want to configure Telegram. Say yes, paste your token when prompted, send `/start` to your bot in Telegram, and press Enter.
 3. To (re)configure later — e.g. new bot, new chat — run: `steamidled --setup-telegram`, or use Settings in the web GUI.
 
 Token + chat id live in `~/.steam-idler/telegram.json`. Picking "no" the first time stores `{ "disabled": true }` so the prompt won't bother you again.
+
+Too chatty? Settings in the web GUI switches each kind below on or off, sends a test message and sends the daily report on demand. The choice is stored as `notify` in `telegram.json`, so the CLI respects it too. Messages about idling stopping for good always come through.
 
 What you'll get:
 
@@ -80,9 +86,9 @@ What you'll get:
 | ▶️ Idling started | On start, with the game count and the exempt game |
 | ⏸️ Idling paused | A disconnect or takeover that lasts longer than 30s (short blips stay silent) |
 | ▶️ Idling resumed after … | Once the reconnect has held for 90s |
-| 🔄 flush | Every 4h: a quick relog that makes Steam commit the playtime |
+| 🔄 flush | Every 4h (configurable): a quick relog that makes Steam commit the playtime |
 | ⚠️ Zombie session | Steam stopped crediting playtime; the idler forces a reconnect |
-| 📊 Daily idling report | Local midnight: today's gain per game, cooldowns, exempt |
+| 📊 Daily idling report | Local midnight (configurable): today's gain per game, cooldowns, exempt |
 | 🛑 Idling stopped | Quit, crash, unrecoverable Steam error, a failed headless start, or Stop / Log out in the web GUI |
 
 ## 🌐 Web GUI
@@ -93,9 +99,9 @@ Rather click than type? `--web` runs the headless daemon plus a web GUI:
 steamidled --web
 ```
 
-Open http://127.0.0.1:4821. From there you can log in (QR or password + Steam Guard), pick games, star favorites, choose the exempt game, start and stop, set up Telegram, and watch progress and logs live. No interactive first run needed: without a saved login it simply waits for you in the browser.
+Open http://127.0.0.1:4821. From there you can log in (QR or password + Steam Guard), add and remove games with one click, mark auto-start games (the CLI's ⭐ favorites), give one game no cooldown (the CLI's ∞ exempt), set up Telegram, and watch progress and logs live. The ⋯ menu on each game sends it into a cooldown now, ends a cooldown early or moves the next one. No interactive first run needed: without a saved login it simply waits for you in the browser.
 
-Your picks last until the daemon restarts. After that it idles your first 32 favorites again, or nothing until you pick something.
+Your picks last until the daemon restarts. After that it idles your first 32 auto-start games again, or nothing until you pick something.
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
@@ -108,6 +114,28 @@ Your picks last until the daemon restarts. After that it idles your first 32 fav
 Behind nginx, add `proxy_set_header Host $host;` and `proxy_buffering off;` so actions work and live updates arrive instantly.
 
 Port already taken, for example by a second `steamidled --web`? It exits right away with code 2 and says so.
+
+### ⚙️ Settings
+
+The Settings page in the web GUI controls the cooldown ranges (or turns cooldowns off), how often playtime gets committed, the watchdog, your Steam status, the daily report hour and the Telegram messages. It saves to `~/.steam-idler/settings.json`, and interactive and `--headless` mode read the same file at startup. Every field is optional, missing ones use these defaults:
+
+```json
+{
+  "schedule": {
+    "enabled": true,
+    "idleMinHours": 168,
+    "idleMaxHours": 720,
+    "cooldownMinHours": 100,
+    "cooldownMaxHours": 200
+  },
+  "flushIntervalHours": 4,
+  "watchdog": true,
+  "personaState": "online",
+  "dailyReportHour": 0
+}
+```
+
+`flushIntervalHours` is one of 1, 2, 4, 6, 8 or 12, `personaState` is `online`, `away` or `offline`. A broken value falls back to its default with a warning in the log.
 
 ## ⌨️ Controls
 
@@ -141,6 +169,8 @@ Idling all your games full-throttle for a month gives them suspiciously identica
 - **Idle phase** — random 7–30 days of active idling
 - **Cooldown phase** — random 100–200 hours where the game drops out of the rotation
 - After cooldown, the game rejoins the idle pool with a fresh idle-phase target and the cycle repeats
+
+Both ranges are yours to change in [Settings](#️-settings), or switch cooldowns off to idle nonstop.
 
 Run for a month and your library ends up with naturally varied playtime instead of one tell-tale plateau.
 
@@ -246,6 +276,7 @@ Everything lives in `~/.steam-idler/` (inside Docker: the `steamidled-config` vo
 ~/.steam-idler/
 ├── credentials.json          # Your login token (keep it secret 🤫)
 ├── favorites-{username}.json # Your favorites + exempt game pick
+├── settings.json             # Optional cooldown ranges, flush interval, report hour, ...
 └── telegram.json             # Optional Telegram bot token + chat id
 ```
 
